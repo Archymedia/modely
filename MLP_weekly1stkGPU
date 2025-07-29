@@ -720,7 +720,7 @@ def main():
     print("Starting MLP model pipeline for SP100 stock prediction...")
     
     # Load data
-    data_path = "/Users/lindawaisova/Desktop/DP/data/SP_100/Reuters_SP100_Data.csv"
+    data_path = "C:\\Users\\Unknown\\Desktop\\xxx\\Reuters_SP100_Data.csv"
     data = load_data(data_path)
     
     # Print column names to debug
