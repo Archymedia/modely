@@ -45,7 +45,7 @@ def load_and_prepare_data(file_path):
     stock_data['LowAdj'] = stock_data['Low'] * (stock_data['CloseAdj'] / stock_data['Close'])
     stock_data['VolumeAdj'] = stock_data['Volume'] / (stock_data['CloseAdj'] / stock_data['Close'])
     
-    # Keep only necessary columns
+    # Keep only necessary columnss
     stock_data = stock_data[['Date', 'OpenAdj', 'HighAdj', 'LowAdj', 'CloseAdj', 'VolumeAdj']]
     
     # Resample to weekly frequency (end of week)
