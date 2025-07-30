@@ -211,7 +211,7 @@ random_search = RandomizedSearchCV(
     n_iter=10,  # Počet kombinací k testování
     cv=kfold,
     verbose=1,
-    n_jobs=1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
+    n_jobs=-1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
     scoring='neg_mean_squared_error'
 )
 
