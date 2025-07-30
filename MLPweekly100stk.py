@@ -202,7 +202,7 @@ early_stopping = [tf.keras.callbacks.EarlyStopping(
 )]
 
 # K-fold CV (10 foldů)
-kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+kfold = KFold(n_splits=10, shuffle=True, random_state=42)
 
 # Random search
 random_search = RandomizedSearchCV(
@@ -211,7 +211,7 @@ random_search = RandomizedSearchCV(
     n_iter=10,  # Počet kombinací k testování
     cv=kfold,
     verbose=1,
-    n_jobs=1,  # Použít 1 core (lze zvýšit pro rychlejší trénink)
+    n_jobs=1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
     scoring='neg_mean_squared_error'
 )
 
@@ -502,6 +502,8 @@ plt.grid(True)
 
 # Přidání názvu a metriky
 plt.suptitle('MLP Model pro Predikci Týdenních Výnosů S&P100 Akcií', fontsize=16)
+
+# Přidání metrik a nejlepších hyperparametrů do hlavního PNG
 metrics_text = (
     f"Testovací R²: {test_r2:.4f} | "
     f"Win Rate: {win_rate:.2%} | "
@@ -509,7 +511,8 @@ metrics_text = (
     f"Sharpe: {sharpe_ratio:.2f} | "
     f"Max Drawdown: {max_drawdown:.2%}"
 )
-plt.figtext(0.5, 0.01, metrics_text, ha='center', fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
+best_params_text = " | ".join([f"{k}: {v}" for k, v in best_params.items()])
+plt.figtext(0.5, 0.01, metrics_text + "\nNejlepší hyperparametry: " + best_params_text, ha='center', fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
 
 # Uložení grafu
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -521,7 +524,4 @@ end_time = time.time()
 elapsed_time = end_time - start_time
 print(f"Celkový čas běhu: {elapsed_time:.2f} sekund")
 
-# Uložení výsledků do CSV
-trade_results.to_csv('sp100_weekly_mlp_trade_results.csv', index=False)
-
-print("Hotovo! Výsledky uloženy jako 'sp100_weekly_mlp_results.png' a 'sp100_weekly_mlp_trade_results.csv'")
+print("Hotovo! Výsledky uloženy jako 'sp100_weekly_mlp_results.png'")
