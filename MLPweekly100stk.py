@@ -158,8 +158,8 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 # ---------------------- 6. Definice MLP modelu ----------------------
-def create_model(neurons=64, hidden_layers=1, dropout_rate=0.2, l2_reg=0.001):
-    """Vytvoření MLP modelu s parametry"""
+def create_model(neurons=64, hidden_layers=1, dropout_rate=0.2, l2_reg=0.001, learning_rate=0.001):
+    """Vytvoření MLP modelu s parametry včetně learning rate"""
     model = Sequential()
     
     # Vstupní vrstva
@@ -175,8 +175,9 @@ def create_model(neurons=64, hidden_layers=1, dropout_rate=0.2, l2_reg=0.001):
     # Výstupní vrstva - predikce jednoho hodnoty (return)
     model.add(Dense(1))
     
-    # Kompilace modelu
-    model.compile(loss='mean_squared_error', optimizer=Adam())
+    # Kompilace modelu s learning rate
+    optimizer = Adam(learning_rate=learning_rate)
+    model.compile(loss='mean_squared_error', optimizer=optimizer)
     
     return model
 
@@ -186,12 +187,13 @@ print("Optimalizace hyperparametrů...")
 # Wrapper pro Keras model
 model = KerasRegressor(model=create_model, verbose=0)
 
-# Definice prostoru hyperparametrů
+# Definice prostoru hyperparametrů včetně learning rate
 param_dist = {
     'model__neurons': [32, 64, 128],
     'model__hidden_layers': [1, 2, 3],
     'model__dropout_rate': [0.1, 0.2, 0.3],
     'model__l2_reg': [0.001, 0.01, 0.1],
+    'model__learning_rate': [0.0005, 0.001, 0.005, 0.01],  # přidáno
     'batch_size': [32, 64, 128],
     'epochs': [500],  # Používáme early stopping
 }
@@ -237,14 +239,16 @@ best_neurons = best_params.get('model__neurons', 64)
 best_hidden_layers = best_params.get('model__hidden_layers', 2)
 best_dropout_rate = best_params.get('model__dropout_rate', 0.2)
 best_l2_reg = best_params.get('model__l2_reg', 0.001)
+best_learning_rate = best_params.get('model__learning_rate', 0.001)  # přidáno
 best_batch_size = best_params.get('batch_size', 64)
 
-# Vytvoření finálního modelu
+# Vytvoření finálního modelu včetně learning rate
 final_model = create_model(
     neurons=best_neurons,
     hidden_layers=best_hidden_layers,
     dropout_rate=best_dropout_rate,
-    l2_reg=best_l2_reg
+    l2_reg=best_l2_reg,
+    learning_rate=best_learning_rate
 )
 
 # Early stopping
