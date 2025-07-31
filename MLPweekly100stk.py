@@ -1,4 +1,4 @@
-# Importy knihoven
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -30,8 +30,8 @@ tf.random.set_seed(42)
 # Měření celkového času běhu
 start_time = time.time()
 
-# Parametry
-DATA_PATH = r"C:\Users\Unknown\Desktop\data\SP100\Reuters_SP100_Data.csv"
+# Parametry (DATA_PATH = r"C:\Users\Unknown\Desktop\data\SP100\Reuters_SP100_Data.csv")
+DATA_PATH = "/Users/lindawaisova/Desktop/DP/data/SP_100/Reuters_SP100_Data.csv"
 WINDOW_SIZE = 10  # Velikost okna pro sliding window
 PT_PERCENTAGE = 0.02  # Profit target (2%)
 SL_PERCENTAGE = 0.02  # Stop loss (2%)
@@ -189,30 +189,30 @@ model = KerasRegressor(model=create_model, verbose=0)
 
 # Definice prostoru hyperparametrů včetně learning rate
 param_dist = {
-    'model__neurons': [32, 64, 128],
-    'model__hidden_layers': [1, 2, 3],
-    'model__dropout_rate': [0.1, 0.2, 0.3],
-    'model__l2_reg': [0.001, 0.01, 0.1],
-    'model__learning_rate': [0.0005, 0.001, 0.005, 0.01],  # přidáno
-    'batch_size': [32, 64, 128],
-    'epochs': [500],  # Používáme early stopping
+    'model__neurons': [32],
+    'model__hidden_layers': [1],
+    'model__dropout_rate': [0.2],
+    'model__l2_reg': [0.01],
+    'model__learning_rate': [0.001],
+    'batch_size': [64],
+    'epochs': [5],  # Používáme early stopping
 }
 
 # Early stopping callback
 early_stopping = [tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
-    patience=10,
+    patience=2,
     restore_best_weights=True
 )]
 
 # K-fold CV (10 foldů)
-kfold = KFold(n_splits=10, shuffle=True, random_state=42)
+kfold = KFold(n_splits=3, shuffle=True, random_state=42)
 
 # Random search
 random_search = RandomizedSearchCV(
     estimator=model,
     param_distributions=param_dist,
-    n_iter=10,  # Počet kombinací k testování
+    n_iter=2,  # Počet kombinací k testování
     cv=kfold,
     verbose=1,
     n_jobs=-1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
@@ -233,7 +233,7 @@ print("Nejlepší skóre:", -random_search.best_score_)
 # ---------------------- 8. Trénování modelu s nejlepšími parametry ----------------------
 print("Trénování finálního modelu...")
 
-# Získání nejlepších parametrů
+# Získání nejlepších parametrů --> CO DĚLAT KDYŽ V BEST_PARAMS NENÍ NALEZEN ŽÁDNÝ HYPERPARAMETR??
 best_params = random_search.best_params_
 best_neurons = best_params.get('model__neurons', 64)
 best_hidden_layers = best_params.get('model__hidden_layers', 2)
@@ -242,7 +242,7 @@ best_l2_reg = best_params.get('model__l2_reg', 0.001)
 best_learning_rate = best_params.get('model__learning_rate', 0.001)  # přidáno
 best_batch_size = best_params.get('batch_size', 64)
 
-# Vytvoření finálního modelu včetně learning rate
+# Vytvoření finálního modelu
 final_model = create_model(
     neurons=best_neurons,
     hidden_layers=best_hidden_layers,
@@ -254,7 +254,7 @@ final_model = create_model(
 # Early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=10,
+    patience=2,
     restore_best_weights=True,
     verbose=1
 )
@@ -262,7 +262,7 @@ early_stopping = EarlyStopping(
 # Trénování finálního modelu
 history = final_model.fit(
     X_train_scaled, y_train,
-    epochs=500,
+    epochs=5,
     batch_size=best_batch_size,
     validation_split=0.2,
     callbacks=[early_stopping],
