@@ -189,13 +189,13 @@ model = KerasRegressor(model=create_model, verbose=0)
 
 # Definice prostoru hyperparametrů včetně learning rate
 param_dist = {
-    'model__neurons': [32],
-    'model__hidden_layers': [1],
-    'model__dropout_rate': [0.2],
-    'model__l2_reg': [0.01],
+    'model__neurons': [32, 64, 128],
+    'model__hidden_layers': [1, 2, 3],
+    'model__dropout_rate': [0.1, 0.2, 0.3],
+    'model__l2_reg': [0.001, 0.01],
     'model__learning_rate': [0.001],
     'batch_size': [64],
-    'epochs': [5],  # Používáme early stopping
+    'epochs': [200],  # Používáme early stopping
 }
 
 # Early stopping callback
@@ -212,7 +212,7 @@ kfold = KFold(n_splits=3, shuffle=True, random_state=42)
 random_search = RandomizedSearchCV(
     estimator=model,
     param_distributions=param_dist,
-    n_iter=2,  # Počet kombinací k testování
+    n_iter=5,  # Počet kombinací k testování
     cv=kfold,
     verbose=1,
     n_jobs=-1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
@@ -254,7 +254,7 @@ final_model = create_model(
 # Early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=2,
+    patience=5,
     restore_best_weights=True,
     verbose=1
 )
@@ -262,7 +262,7 @@ early_stopping = EarlyStopping(
 # Trénování finálního modelu
 history = final_model.fit(
     X_train_scaled, y_train,
-    epochs=5,
+    epochs=200,
     batch_size=best_batch_size,
     validation_split=0.2,
     callbacks=[early_stopping],
