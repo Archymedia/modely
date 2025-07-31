@@ -30,8 +30,8 @@ tf.random.set_seed(42)
 # Měření celkového času běhu
 start_time = time.time()
 
-# Parametry (DATA_PATH = r"C:\Users\Unknown\Desktop\data\SP100\Reuters_SP100_Data.csv")
-DATA_PATH = "/Users/lindawaisova/Desktop/DP/data/SP_100/Reuters_SP100_Data.csv"
+# Parametry DATA_PATH = "/Users/lindawaisova/Desktop/DP/data/SP_100/Reuters_SP100_Data.csv"
+DATA_PATH = r"C:\Users\Unknown\Desktop\data\SP100\Reuters_SP100_Data.csv"
 WINDOW_SIZE = 10  # Velikost okna pro sliding window
 PT_PERCENTAGE = 0.02  # Profit target (2%)
 SL_PERCENTAGE = 0.02  # Stop loss (2%)
@@ -191,11 +191,11 @@ model = KerasRegressor(model=create_model, verbose=0)
 param_dist = {
     'model__neurons': [32, 64, 128],
     'model__hidden_layers': [1, 2, 3],
-    'model__dropout_rate': [0.1, 0.2, 0.3],
-    'model__l2_reg': [0.001, 0.01],
+    'model__dropout_rate': [0.2],
+    'model__l2_reg': [0.01],
     'model__learning_rate': [0.001],
     'batch_size': [64],
-    'epochs': [200],  # Používáme early stopping
+    'epochs': [100],  # Používáme early stopping
 }
 
 # Early stopping callback
@@ -206,7 +206,7 @@ early_stopping = [tf.keras.callbacks.EarlyStopping(
 )]
 
 # K-fold CV
-kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+kfold = KFold(n_splits=2, shuffle=True, random_state=42)
 
 # Random search
 random_search = RandomizedSearchCV(
@@ -215,7 +215,7 @@ random_search = RandomizedSearchCV(
     n_iter=5,  # Počet kombinací k testování
     cv=kfold,
     verbose=1,
-    n_jobs=-1,  # Použít 1 core (lze zvýšit pro rychlejší trénink) POUŽÍT -1 !!! 
+    n_jobs=-1,  # Použít 1 core, simultánní je -1
     scoring='neg_mean_squared_error'
 )
 
@@ -254,20 +254,34 @@ final_model = create_model(
 # Early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=5,
+    patience=2,
     restore_best_weights=True,
     verbose=1
 )
 
 # Trénování finálního modelu
+
+# Vlastní callback pro výpis průběhu tréninku s procenty
+class ProgressCallback(tf.keras.callbacks.Callback):
+    def __init__(self, epochs):
+        super().__init__()
+        self.epochs = epochs
+    def on_epoch_end(self, epoch, logs=None):
+        percent = int((epoch + 1) / self.epochs * 100)
+        print(f"Trénink: {epoch + 1}/{self.epochs} ({percent} %) - loss: {logs.get('loss'):.6f} - val_loss: {logs.get('val_loss'):.6f}")
+
+progress_callback = ProgressCallback(epochs=200)
+
+print("Začíná trénink modelu...")
 history = final_model.fit(
     X_train_scaled, y_train,
-    epochs=200,
+    epochs=100,
     batch_size=best_batch_size,
     validation_split=0.2,
-    callbacks=[early_stopping],
-    verbose=1
+    callbacks=[early_stopping, progress_callback],
+    verbose=0
 )
+print("Trénink dokončen.")
 
 # ---------------------- 9. Predikce a vyhodnocení modelu ----------------------
 print("Predikce a vyhodnocení...")
@@ -522,21 +536,21 @@ plt.figtext(0.5, 0.01, metrics_text + "\nNejlepší hyperparametry: " + best_par
 
 # Uložení grafu
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig('sp100_weekly_mlp_results.png', dpi=300)
+plt.savefig('C:\\Users\\Unknown\\Desktop\\xxx\\modely\\modely\\pngs\\sp100_weekly_mlp_results.png', dpi=300)
 plt.close()
 
 # Výpis celkového času běhu
 end_time = time.time()
-elapsed_time = end_time - start_time
-print(f"Celkový čas běhu: {elapsed_time:.2f} sekund")
+elapsed_time = (end_time - start_time)/60 # v minutách
+print(f"Celkový čas běhu: {elapsed_time:.2f} minut a {elapsed_time*60:.0f} sekund")
 
 # Uložení výsledků do CSV
-if 'trade_results' in locals() and len(trade_results) > 0:
-    trade_results.to_csv('trade_results.csv', index=False)
-    print("Výsledky obchodů uloženy do 'trade_results.csv'")
+#if 'trade_results' in locals() and len(trade_results) > 0:
+#    trade_results.to_csv('trade_results.csv', index=False)
+#    print("Výsledky obchodů uloženy do 'trade_results.csv'")
 
 # Uložení modelu
-final_model.save('mlp_model.h5')
-print("Model uložen jako 'mlp_model.h5'")
+# final_model.save('mlp_model.h5')
+# print("Model uložen jako 'mlp_model.h5'")
 
 print("Hotovo! Výsledky uloženy jako 'sp100_weekly_mlp_results.png'")
