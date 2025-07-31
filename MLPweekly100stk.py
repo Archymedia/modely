@@ -530,4 +530,13 @@ end_time = time.time()
 elapsed_time = end_time - start_time
 print(f"Celkový čas běhu: {elapsed_time:.2f} sekund")
 
+# Uložení výsledků do CSV
+if 'trade_results' in locals() and len(trade_results) > 0:
+    trade_results.to_csv('trade_results.csv', index=False)
+    print("Výsledky obchodů uloženy do 'trade_results.csv'")
+
+# Uložení modelu
+final_model.save('mlp_model.h5')
+print("Model uložen jako 'mlp_model.h5'")
+
 print("Hotovo! Výsledky uloženy jako 'sp100_weekly_mlp_results.png'")
