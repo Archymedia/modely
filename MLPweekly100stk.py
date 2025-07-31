@@ -205,8 +205,8 @@ early_stopping = [tf.keras.callbacks.EarlyStopping(
     restore_best_weights=True
 )]
 
-# K-fold CV (10 foldů)
-kfold = KFold(n_splits=3, shuffle=True, random_state=42)
+# K-fold CV
+kfold = KFold(n_splits=5, shuffle=True, random_state=42)
 
 # Random search
 random_search = RandomizedSearchCV(
