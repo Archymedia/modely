@@ -3,19 +3,21 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from datetime import datetime
+import tensorflow as tf
 import time
+import warnings
+
+from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, KFold
 from sklearn.metrics import mean_squared_error, r2_score
 from scikeras.wrappers import KerasRegressor
-import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
-import warnings
+
 
 # Potlačení varování
 warnings.filterwarnings('ignore')
