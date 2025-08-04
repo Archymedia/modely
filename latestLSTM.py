@@ -37,15 +37,29 @@ np.random.seed(42)
 tf.random.set_seed(42)
 
 # ==================== CONFIGURATION PARAMETERS ====================
-# Model parameters
+# Basic model parameters
 WINDOW_SIZE = 20
-EPOCHS = 30
-BATCH_SIZE = 64
-PATIENCE = 3
 
 # Hyperparameter search parameters  
-N_ITER = 4
-CV_SPLITS = 2
+HP_EPOCHS = 30
+HP_BATCH_SIZE = 64
+HP_PATIENCE = 2
+HP_N_ITER = 4
+HP_CV_SPLITS = 2
+
+# Hyperparameter space for optimization
+PARAM_DIST = {
+    'model__units': [32, 64, 128],
+    'model__dropout_rate': [0.2, 0.3],
+    'model__l2_reg': [0.01, 0.001],
+    'model__n_layers': [1, 2, 3],
+    'model__learning_rate': [0.001]
+}
+
+# Final model training parameters
+FINAL_EPOCHS = 30
+FINAL_BATCH_SIZE = 64
+FINAL_PATIENCE = 3
 
 # Trading strategy parameters
 TAKE_PROFIT_PCT = 0.02
@@ -402,8 +416,8 @@ print("LSTM model architecture defined")
 # Create model wrapper for scikit-learn compatibility
 lstm_model = KerasRegressor(
     model=create_lstm_model,
-    epochs=EPOCHS,
-    batch_size=BATCH_SIZE,
+    epochs=HP_EPOCHS,
+    batch_size=HP_BATCH_SIZE,
     validation_split=0.2,
     verbose=1
 )
@@ -416,33 +430,26 @@ print("-"*80)
 # Define early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=PATIENCE-1,  # Use slightly lower patience for hyperparameter search
+    patience=HP_PATIENCE,
     restore_best_weights=True,
     verbose=1
 )
 
-# Define hyperparameter space
-param_dist = {
-    'model__units': [32, 64, 128], # 32, 64, 128
-    'model__dropout_rate': [0.2, 0.3], # 0.3, 0.4, 0.5
-    'model__l2_reg': [0.01, 0.001], # 0.01, 0.001, 0.0001
-    'model__n_layers': [1, 2, 3], # 1, 2, 3
-    'model__learning_rate': [0.001] # 0.01 0.001, 0.0001
-    # Note: fit parameters like callbacks are set during KerasRegressor initialization
-}
+# Use hyperparameter space from configuration
+param_dist = PARAM_DIST
 
 print("Hyperparameter space:")
 for param, values in param_dist.items():
     print(f"  {param}: {values}")
 
 # Define time series k-fold cross-validation
-tscv = TimeSeriesSplit(n_splits=CV_SPLITS)
+tscv = TimeSeriesSplit(n_splits=HP_CV_SPLITS)
 
 # Define RandomizedSearchCV
 random_search = RandomizedSearchCV(
     estimator=lstm_model,
     param_distributions=param_dist,
-    n_iter=N_ITER,
+    n_iter=HP_N_ITER,
     cv=tscv,
     verbose=1,
     n_jobs=-1,  # Run in parallel to speed up the search
@@ -487,7 +494,7 @@ final_model = create_lstm_model(
 # Define callbacks
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=PATIENCE,
+    patience=FINAL_PATIENCE,
     restore_best_weights=True,
     verbose=1
 )
@@ -496,8 +503,8 @@ early_stopping = EarlyStopping(
 print("Training final model...")
 history = final_model.fit(
     X_train, y_train,
-    epochs=EPOCHS,
-    batch_size=BATCH_SIZE,
+    epochs=FINAL_EPOCHS,
+    batch_size=FINAL_BATCH_SIZE,
     validation_split=0.2,
     callbacks=[early_stopping],
     verbose=1
@@ -812,9 +819,9 @@ param_data = [
     ["Dropout Rate", f"{best_dropout_rate:.1f}"],
     ["L2 Regularization", f"{best_l2_reg:.4f}"],
     ["Learning Rate", f"{best_learning_rate:.4f}"],
-    ["Patience", PATIENCE],
-    ["Batch Size", BATCH_SIZE],
-    ["Epochs", EPOCHS]
+    ["Patience (Final)", FINAL_PATIENCE],
+    ["Batch Size (Final)", FINAL_BATCH_SIZE],
+    ["Epochs (Final)", FINAL_EPOCHS]
 ]
 
 param_table = ax4.table(cellText=param_data, loc='center', cellLoc='center', 
