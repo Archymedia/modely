@@ -36,6 +36,26 @@ pd.set_option('display.width', 200)
 np.random.seed(42)
 tf.random.set_seed(42)
 
+# ==================== CONFIGURATION PARAMETERS ====================
+# Model parameters
+WINDOW_SIZE = 20
+EPOCHS = 30
+BATCH_SIZE = 64
+PATIENCE = 3
+
+# Hyperparameter search parameters  
+N_ITER = 4
+CV_SPLITS = 2
+
+# Trading strategy parameters
+TAKE_PROFIT_PCT = 0.02
+STOP_LOSS_PCT = 0.02
+
+# Data filtering parameters
+START_DATE = '2005-01-01'
+END_DATE = '2023-12-29'
+TRAIN_CUTOFF = '2020-12-31'
+
 # Start time measurement
 start_time = time.time()
 
@@ -70,9 +90,28 @@ print(f"Time range: {df['Date'].min()} to {df['Date'].max()}")
 df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
 print("Date column converted to datetime with timezone handling")
 
-# Check for missing values
-print("\nMissing values per column:")
-print(df.isna().sum())
+# *** FILTER DATA TO DEFINED PERIOD ***
+start_date = pd.Timestamp(START_DATE)
+end_date = pd.Timestamp(END_DATE)
+print(f"\nFiltering data to defined period: {start_date.date()} to {end_date.date()}")
+
+initial_rows = df.shape[0]
+df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)].copy()
+print(f"Filtered data shape: {df.shape} (removed {initial_rows - df.shape[0]} rows outside defined period)")
+print(f"Filtered time range: {df['Date'].min()} to {df['Date'].max()}")
+
+# Check for missing values only in relevant columns (Date, Close and columns to the right)
+relevant_columns = ['Date', 'Close', 'CloseAdj', 'Volume', 'TotRet', 'ID']
+# Filter to only show columns that exist in the dataframe
+existing_relevant_cols = [col for col in relevant_columns if col in df.columns]
+print(f"\nMissing values in relevant columns:")
+for col in existing_relevant_cols:
+    missing_count = df[col].isna().sum()
+    if missing_count > 0:
+        print(f"{col}: {missing_count}")
+    else:
+        print(f"{col}: 0")
+print("(Ignoring bid, ask, MV and other non-essential columns)")
 
 # ---------------------- 2. Weekly Data Processing ----------------------
 print("\n" + "-"*80)
@@ -214,8 +253,8 @@ print("7. TRAIN-TEST SPLIT")
 print("-"*80)
 
 # Define the cutoff date for train-test split
-train_cutoff = pd.Timestamp('2020-12-31')
-print(f"Train-test split date: {train_cutoff}")
+train_cutoff = pd.Timestamp(TRAIN_CUTOFF)
+print(f"Train-test split date: {train_cutoff} (training period: 2005-2020, testing period: 2021-2023)")
 
 # Ensure dates have consistent timezone handling for comparison
 feature_df_active['Date'] = feature_df_active['Date'].dt.tz_localize(None)
@@ -233,7 +272,7 @@ print("8. DATA PREPARATION FOR LSTM")
 print("-"*80)
 
 # Define the window size
-window_size = 2  # Use 5 weeks of data to predict next week #zkusit příště 20 22 50 60
+window_size = WINDOW_SIZE  # Use configuration parameter
 
 # Define feature columns and target
 feature_columns = [
@@ -363,8 +402,8 @@ print("LSTM model architecture defined")
 # Create model wrapper for scikit-learn compatibility
 lstm_model = KerasRegressor(
     model=create_lstm_model,
-    epochs=3,  # 1000
-    batch_size=64,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
     validation_split=0.2,
     verbose=1
 )
@@ -377,18 +416,18 @@ print("-"*80)
 # Define early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=2, # 10
+    patience=PATIENCE-1,  # Use slightly lower patience for hyperparameter search
     restore_best_weights=True,
     verbose=1
 )
 
 # Define hyperparameter space
 param_dist = {
-    'model__units': [32], # 32, 64, 128
-    'model__dropout_rate': [0.4], # 0.3, 0.4, 0.5
-    'model__l2_reg': [0.01], # 0.01, 0.001, 0.0001
-    'model__n_layers': [1], # 1, 2, 3
-    'model__learning_rate': [0.01] # 0.01 0.001, 0.0001
+    'model__units': [32, 64, 128], # 32, 64, 128
+    'model__dropout_rate': [0.2, 0.3], # 0.3, 0.4, 0.5
+    'model__l2_reg': [0.01, 0.001], # 0.01, 0.001, 0.0001
+    'model__n_layers': [1, 2, 3], # 1, 2, 3
+    'model__learning_rate': [0.001] # 0.01 0.001, 0.0001
     # Note: fit parameters like callbacks are set during KerasRegressor initialization
 }
 
@@ -397,13 +436,13 @@ for param, values in param_dist.items():
     print(f"  {param}: {values}")
 
 # Define time series k-fold cross-validation
-tscv = TimeSeriesSplit(n_splits=2) # 10
+tscv = TimeSeriesSplit(n_splits=CV_SPLITS)
 
 # Define RandomizedSearchCV
 random_search = RandomizedSearchCV(
     estimator=lstm_model,
     param_distributions=param_dist,
-    n_iter=1,  # Number of parameter combinations to try 10
+    n_iter=N_ITER,
     cv=tscv,
     verbose=1,
     n_jobs=-1,  # Run in parallel to speed up the search
@@ -448,7 +487,7 @@ final_model = create_lstm_model(
 # Define callbacks
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=3, # 20
+    patience=PATIENCE,
     restore_best_weights=True,
     verbose=1
 )
@@ -457,8 +496,8 @@ early_stopping = EarlyStopping(
 print("Training final model...")
 history = final_model.fit(
     X_train, y_train,
-    epochs=3, # 1000
-    batch_size=64,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
     validation_split=0.2,
     callbacks=[early_stopping],
     verbose=1
@@ -509,7 +548,7 @@ print("\n" + "-"*80)
 print("13. IMPLEMENTING TRADING STRATEGY")
 print("-"*80)
 
-def implement_trading_strategy(predictions_df, take_profit_pct=0.02, stop_loss_pct=0.02):
+def implement_trading_strategy(predictions_df, take_profit_pct=TAKE_PROFIT_PCT, stop_loss_pct=STOP_LOSS_PCT):
     print(f"Implementing trading strategy with PT={take_profit_pct:.1%}, SL={stop_loss_pct:.1%}")
     
     # Ensure dates have no timezone information for consistent comparison
@@ -618,6 +657,11 @@ def calculate_performance_metrics(trades):
     gross_loss = abs(trades.loc[trades['TradePL'] < 0, 'TradePL'].sum())
     profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
     
+    # Calculate number of trades
+    total_trades = len(trades)
+    long_trades = len(trades[trades['Position'] == 'LONG'])
+    short_trades = len(trades[trades['Position'] == 'SHORT'])
+    
     return {
         'Cumulative Return': total_return,
         'Annualized Return': annualized_return,
@@ -626,6 +670,9 @@ def calculate_performance_metrics(trades):
         'Maximum Drawdown': max_drawdown,
         'Win Rate': win_rate,
         'Profit Factor': profit_factor,
+        'Total Trades': total_trades,
+        'Long Trades': long_trades,
+        'Short Trades': short_trades,
         'Portfolio Returns': portfolio_returns,
         'Cumulative Wealth': cumulative_wealth
     }
@@ -642,6 +689,7 @@ print(f"Sharpe Ratio: {train_metrics['Sharpe Ratio']:.3f}")
 print(f"Maximum Drawdown: {train_metrics['Maximum Drawdown']:.2%}")
 print(f"Win Rate: {train_metrics['Win Rate']:.2%}")
 print(f"Profit Factor: {train_metrics['Profit Factor']:.3f}")
+print(f"Total Trades: {train_metrics['Total Trades']:,} (Long: {train_metrics['Long Trades']:,}, Short: {train_metrics['Short Trades']:,})")
 
 print("\nTesting Period:")
 print(f"Cumulative Return: {test_metrics['Cumulative Return']:.2%}")
@@ -650,6 +698,7 @@ print(f"Sharpe Ratio: {test_metrics['Sharpe Ratio']:.3f}")
 print(f"Maximum Drawdown: {test_metrics['Maximum Drawdown']:.2%}")
 print(f"Win Rate: {test_metrics['Win Rate']:.2%}")
 print(f"Profit Factor: {test_metrics['Profit Factor']:.3f}")
+print(f"Total Trades: {test_metrics['Total Trades']:,} (Long: {test_metrics['Long Trades']:,}, Short: {test_metrics['Short Trades']:,})")
 
 # ---------------------- 15. Visualization ----------------------
 print("\n" + "-"*80)
@@ -680,12 +729,20 @@ ax1.set_ylabel('Loss (MSE)')
 ax1.legend()
 ax1.grid(True, alpha=0.3)
 
-# 2. Stock Price - Actual vs Predicted (ALL DATA)
+# 2. Stock Price - Actual vs Predicted (FILTERED DATA ONLY)
 ax2 = fig.add_subplot(gs[0, 1])
 
 # Combine all predictions (train + test) for complete timeline
 all_predictions = pd.concat([train_predictions_df, test_predictions_df]).sort_values('Date')
 all_predictions['Date'] = pd.to_datetime(all_predictions['Date']).dt.tz_localize(None)
+
+# *** FILTER TO DEFINED PERIOD ONLY ***
+period_start = pd.Timestamp('2005-01-01')
+period_end = pd.Timestamp('2023-12-29')
+all_predictions = all_predictions[
+    (all_predictions['Date'] >= period_start) & 
+    (all_predictions['Date'] <= period_end)
+].copy()
 
 # Aggregate daily average predictions across all stocks
 daily_avg = all_predictions.groupby('Date')[['Actual', 'Predicted']].mean().reset_index()
@@ -695,38 +752,51 @@ ax2.plot(daily_avg['Date'], daily_avg['Actual'], label='Actual Returns',
 ax2.plot(daily_avg['Date'], daily_avg['Predicted'], label='Predicted Returns', 
          alpha=0.8, linewidth=1, color='red', linestyle='--')
 
-# Add vertical line at train/test split
+# Add vertical line at train/test split (2021-01-01)
 ax2.axvline(x=pd.Timestamp('2021-01-01'), color='green', linestyle='-', 
-            linewidth=2, label='Train/Test Split')
+            linewidth=2, label='Train/Test Split (2021-01-01)')
 
-ax2.set_title('Actual vs Predicted Returns (All Data)', fontsize=14, fontweight='bold')
+ax2.set_title('Actual vs Predicted Returns (2005-2023)', fontsize=14, fontweight='bold')
 ax2.set_xlabel('Date')
 ax2.set_ylabel('Weekly Return')
 ax2.legend()
 ax2.grid(True, alpha=0.3)
+ax2.set_xlim(period_start, period_end)  # Explicitly set x-axis limits
 
 # 3. Trading Strategy Performance - Cumulative Returns
 ax3 = fig.add_subplot(gs[1, :])
 
-# Training period
+# Training period - filter to defined period
 train_dates = pd.to_datetime(train_metrics['Portfolio Returns'].index).tz_localize(None)
-ax3.plot(train_dates, train_metrics['Cumulative Wealth'], 
+# Filter training dates to be within defined period
+period_start = pd.Timestamp('2005-01-01')
+period_end = pd.Timestamp('2023-12-29')
+train_mask = (train_dates >= period_start) & (train_dates <= pd.Timestamp('2020-12-31'))
+filtered_train_dates = train_dates[train_mask]
+filtered_train_wealth = train_metrics['Cumulative Wealth'][train_mask]
+
+ax3.plot(filtered_train_dates, filtered_train_wealth, 
          label='Training Period (2005-2020)', color='blue', linewidth=2)
 
-# Testing period
+# Testing period - filter to defined period  
 test_dates = pd.to_datetime(test_metrics['Portfolio Returns'].index).tz_localize(None)
-ax3.plot(test_dates, test_metrics['Cumulative Wealth'], 
+test_mask = (test_dates >= pd.Timestamp('2021-01-01')) & (test_dates <= period_end)
+filtered_test_dates = test_dates[test_mask]
+filtered_test_wealth = test_metrics['Cumulative Wealth'][test_mask]
+
+ax3.plot(filtered_test_dates, filtered_test_wealth, 
          label='Testing Period (2021-2023)', color='green', linewidth=2)
 
 # Add vertical line at the train/test split point
 ax3.axvline(x=pd.Timestamp('2021-01-01'), color='red', linestyle='--', 
-            linewidth=2, label='Train/Test Split')
+            linewidth=2, label='Train/Test Split (2021-01-01)')
 
-ax3.set_title('Trading Strategy Cumulative Returns', fontsize=16, fontweight='bold')
+ax3.set_title('Trading Strategy Cumulative Returns (2005-2023)', fontsize=16, fontweight='bold')
 ax3.set_xlabel('Years')
 ax3.set_ylabel('Portfolio Value (Starting at $1)')
 ax3.legend(fontsize=12)
 ax3.grid(True, alpha=0.3)
+ax3.set_xlim(period_start, period_end)  # Explicitly set x-axis limits
 
 # 4. Best Parameters Table
 ax4 = fig.add_subplot(gs[2, 0])
@@ -742,9 +812,9 @@ param_data = [
     ["Dropout Rate", f"{best_dropout_rate:.1f}"],
     ["L2 Regularization", f"{best_l2_reg:.4f}"],
     ["Learning Rate", f"{best_learning_rate:.4f}"],
-    ["Patience", "3"],
-    ["Batch Size", "64"],
-    ["Epochs", "3"]
+    ["Patience", PATIENCE],
+    ["Batch Size", BATCH_SIZE],
+    ["Epochs", EPOCHS]
 ]
 
 param_table = ax4.table(cellText=param_data, loc='center', cellLoc='center', 
@@ -776,7 +846,10 @@ metrics_data = [
     ["Sharpe Ratio", f"{train_metrics['Sharpe Ratio']:.3f}", f"{test_metrics['Sharpe Ratio']:.3f}"],
     ["Max Drawdown", f"{train_metrics['Maximum Drawdown']:.2%}", f"{test_metrics['Maximum Drawdown']:.2%}"],
     ["Win Rate", f"{train_metrics['Win Rate']:.2%}", f"{test_metrics['Win Rate']:.2%}"],
-    ["Profit Factor", f"{train_metrics['Profit Factor']:.3f}", f"{test_metrics['Profit Factor']:.3f}"]
+    ["Profit Factor", f"{train_metrics['Profit Factor']:.3f}", f"{test_metrics['Profit Factor']:.3f}"],
+    ["Total Trades", f"{train_metrics['Total Trades']:,}", f"{test_metrics['Total Trades']:,}"],
+    ["Long Trades", f"{train_metrics['Long Trades']:,}", f"{test_metrics['Long Trades']:,}"],
+    ["Short Trades", f"{train_metrics['Short Trades']:,}", f"{test_metrics['Short Trades']:,}"]
 ]
 
 metrics_table = ax5.table(cellText=metrics_data, loc='center', cellLoc='center', 
