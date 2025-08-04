@@ -1,0 +1,64 @@
+============================================================
+           EXTENDED MODEL PERFORMANCE EVALUATION
+============================================================
+
+17.1.1 MSE (Mean Squared Error)
+------------------------------
+Training MSE: 0.002267
+Testing MSE: 0.001989
+Test/Train MSE Ratio: 0.878
+✅ Model has reasonable generalization ability
+
+17.1.2 Cumulative Return
+--------------------
+Training cumulative return: -31.08%
+Testing cumulative return: -0.50%
+Training annualized return: -2.40%
+Testing annualized return: -0.20%
+❌ Model underperforms market benchmark by 7.20%
+
+17.1.3 Risk
+------------
+Training volatility: 2.82%
+Testing volatility: 3.72%
+Training max drawdown: -36.23%
+Testing max drawdown: -3.17%
+Risk level: Low
+✅ Low maximum drawdown - conservative risk
+
+17.1.4 Realized Alpha
+------------------
+Training alpha (above risk-free rate): -4.40%
+Testing alpha (above risk-free rate): -2.20%
+Training information ratio: -3.333
+Testing information ratio: -1.932
+❌ Low realized alpha - model doesn't add sufficient value
+
+17.1.5 Statistical Significance
+-------------------------
+Training t-statistic: -3.314
+Testing t-statistic: -0.055
+Training p-value: 0.0010
+Testing p-value: 0.9564
+❌ Results are not statistically significant at 5.0% level
+
+Prediction accuracy:
+Training R²: -0.0002 (very weak predictive power)
+Testing R²: -0.0002 (very weak predictive power)
+
+Trade success rate:
+Training win rate: 48.21%
+Testing win rate: 49.96%
+❌ Below average trade success rate
+
+============================================================
+OVERALL MODEL ASSESSMENT
+============================================================
+❌ Overall assessment: Poor (score: 2.2/10)
+Recommendation: Model requires further optimization
+
+============================================================
+ANALYSIS COMPLETED
+============================================================
+
+Total execution time: 58 minutes and 1 seconds
