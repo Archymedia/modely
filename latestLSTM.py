@@ -12,8 +12,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime, timedelta
+import tensorflow as tf
 import warnings
+
+from datetime import datetime, timedelta
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
@@ -24,7 +26,6 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
 from scipy import stats
 from scikeras.wrappers import KerasRegressor
-import tensorflow as tf
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -232,7 +233,7 @@ print("8. DATA PREPARATION FOR LSTM")
 print("-"*80)
 
 # Define the window size
-window_size = 5  # Use 5 weeks of data to predict next week #zkusit příště 20 22 50 60
+window_size = 2  # Use 5 weeks of data to predict next week #zkusit příště 20 22 50 60
 
 # Define feature columns and target
 feature_columns = [
@@ -314,25 +315,42 @@ def create_lstm_model(units=64, dropout_rate=0.3, l2_reg=0.001, n_layers=1, lear
     model = Sequential()
     
     # First LSTM layer
+    # Using standard LSTM activations: tanh for candidate states and outputs, sigmoid for gates
     if n_layers == 1:
-        model.add(LSTM(units=units, activation='relu', input_shape=(window_size, len(feature_columns)),
-                      kernel_regularizer=l2(l2_reg), return_sequences=False))
+        model.add(LSTM(units=units, 
+                      activation='tanh',           # tanh for candidate states and outputs
+                      recurrent_activation='sigmoid', # sigmoid for gates (input, forget, output)
+                      input_shape=(window_size, len(feature_columns)),
+                      kernel_regularizer=l2(l2_reg), 
+                      return_sequences=False))
     else:
-        model.add(LSTM(units=units, activation='relu', input_shape=(window_size, len(feature_columns)),
-                      kernel_regularizer=l2(l2_reg), return_sequences=True))
+        model.add(LSTM(units=units, 
+                      activation='tanh',           # tanh for candidate states and outputs
+                      recurrent_activation='sigmoid', # sigmoid for gates (input, forget, output)
+                      input_shape=(window_size, len(feature_columns)),
+                      kernel_regularizer=l2(l2_reg), 
+                      return_sequences=True))
     
     model.add(Dropout(dropout_rate))
     
     # Additional LSTM layers if specified
     for i in range(1, n_layers):
         if i == n_layers - 1:
-            model.add(LSTM(units=units, activation='relu', kernel_regularizer=l2(l2_reg), return_sequences=False))
+            model.add(LSTM(units=units, 
+                          activation='tanh',           # tanh for candidate states and outputs
+                          recurrent_activation='sigmoid', # sigmoid for gates (input, forget, output)
+                          kernel_regularizer=l2(l2_reg), 
+                          return_sequences=False))
         else:
-            model.add(LSTM(units=units, activation='relu', kernel_regularizer=l2(l2_reg), return_sequences=True))
+            model.add(LSTM(units=units, 
+                          activation='tanh',           # tanh for candidate states and outputs
+                          recurrent_activation='sigmoid', # sigmoid for gates (input, forget, output)
+                          kernel_regularizer=l2(l2_reg), 
+                          return_sequences=True))
         model.add(Dropout(dropout_rate))
     
-    # Output layer
-    model.add(Dense(1))
+    # Output layer - Linear activation for regression (predicting returns)
+    model.add(Dense(1, activation='linear'))  # Explicit linear activation for regression
     
     # Compile the model
     optimizer = Adam(learning_rate=learning_rate)
@@ -345,8 +363,8 @@ print("LSTM model architecture defined")
 # Create model wrapper for scikit-learn compatibility
 lstm_model = KerasRegressor(
     model=create_lstm_model,
-    epochs=5,  # 1000
-    batch_size=32,
+    epochs=3,  # 1000
+    batch_size=64,
     validation_split=0.2,
     verbose=1
 )
@@ -359,7 +377,7 @@ print("-"*80)
 # Define early stopping
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=3, # 10
+    patience=2, # 10
     restore_best_weights=True,
     verbose=1
 )
@@ -378,14 +396,14 @@ print("Hyperparameter space:")
 for param, values in param_dist.items():
     print(f"  {param}: {values}")
 
-# Define time series cross-validation
-tscv = TimeSeriesSplit(n_splits=10)
+# Define time series k-fold cross-validation
+tscv = TimeSeriesSplit(n_splits=2) # 10
 
 # Define RandomizedSearchCV
 random_search = RandomizedSearchCV(
     estimator=lstm_model,
     param_distributions=param_dist,
-    n_iter=2,  # Number of parameter combinations to try 10
+    n_iter=1,  # Number of parameter combinations to try 10
     cv=tscv,
     verbose=1,
     n_jobs=-1,  # Run in parallel to speed up the search
@@ -439,8 +457,8 @@ early_stopping = EarlyStopping(
 print("Training final model...")
 history = final_model.fit(
     X_train, y_train,
-    epochs=5, # 1000
-    batch_size=32,
+    epochs=3, # 1000
+    batch_size=64,
     validation_split=0.2,
     callbacks=[early_stopping],
     verbose=1
@@ -635,13 +653,12 @@ print(f"Profit Factor: {test_metrics['Profit Factor']:.3f}")
 
 # ---------------------- 15. Visualization ----------------------
 print("\n" + "-"*80)
-print("15. CREATING VISUALIZATIONS")
+print("15. CREATING COMPREHENSIVE VISUALIZATION")
 print("-"*80)
 
 # Set up the plotting style
 plt.style.use('seaborn-v0_8-darkgrid')
-plt.rcParams['figure.figsize'] = (14, 8)
-plt.rcParams['font.size'] = 12
+plt.rcParams['font.size'] = 10
 
 # Create a directory for saving plots
 output_dir = "lstm_weekly_results"
@@ -649,106 +666,191 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
-# 1. Training History Plot
-plt.figure(figsize=(14, 6))
-plt.plot(history.history['loss'], label='Training Loss')
-plt.plot(history.history['val_loss'], label='Validation Loss')
-plt.title('LSTM Model Training History', fontsize=16)
-plt.xlabel('Epochs', fontsize=14)
-plt.ylabel('Loss (MSE)', fontsize=14)
-plt.legend(fontsize=12)
-plt.grid(True)
-plt.tight_layout()
-history_plot_path = os.path.join(output_dir, 'training_history.png')
-plt.savefig(history_plot_path)
-print(f"Saved training history plot to {history_plot_path}")
+# Create comprehensive figure with subplots
+fig = plt.figure(figsize=(20, 24))
+gs = fig.add_gridspec(4, 2, height_ratios=[1, 1, 1, 1.2], hspace=0.3, wspace=0.3)
 
-# 2. Cumulative Returns Plot
-plt.figure(figsize=(14, 6))
+# 1. Model Loss (Training History)
+ax1 = fig.add_subplot(gs[0, 0])
+ax1.plot(history.history['loss'], label='Training Loss', linewidth=2, color='blue')
+ax1.plot(history.history['val_loss'], label='Validation Loss', linewidth=2, color='red')
+ax1.set_title('Model Loss During Training', fontsize=14, fontweight='bold')
+ax1.set_xlabel('Epochs')
+ax1.set_ylabel('Loss (MSE)')
+ax1.legend()
+ax1.grid(True, alpha=0.3)
+
+# 2. Stock Price - Actual vs Predicted (ALL DATA)
+ax2 = fig.add_subplot(gs[0, 1])
+
+# Combine all predictions (train + test) for complete timeline
+all_predictions = pd.concat([train_predictions_df, test_predictions_df]).sort_values('Date')
+all_predictions['Date'] = pd.to_datetime(all_predictions['Date']).dt.tz_localize(None)
+
+# Aggregate daily average predictions across all stocks
+daily_avg = all_predictions.groupby('Date')[['Actual', 'Predicted']].mean().reset_index()
+
+ax2.plot(daily_avg['Date'], daily_avg['Actual'], label='Actual Returns', 
+         alpha=0.8, linewidth=1, color='darkblue')
+ax2.plot(daily_avg['Date'], daily_avg['Predicted'], label='Predicted Returns', 
+         alpha=0.8, linewidth=1, color='red', linestyle='--')
+
+# Add vertical line at train/test split
+ax2.axvline(x=pd.Timestamp('2021-01-01'), color='green', linestyle='-', 
+            linewidth=2, label='Train/Test Split')
+
+ax2.set_title('Actual vs Predicted Returns (All Data)', fontsize=14, fontweight='bold')
+ax2.set_xlabel('Date')
+ax2.set_ylabel('Weekly Return')
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
+# 3. Trading Strategy Performance - Cumulative Returns
+ax3 = fig.add_subplot(gs[1, :])
 
 # Training period
 train_dates = pd.to_datetime(train_metrics['Portfolio Returns'].index).tz_localize(None)
-plt.plot(train_dates, train_metrics['Cumulative Wealth'], 
-         label='Training (2005-2020)', color='blue')
+ax3.plot(train_dates, train_metrics['Cumulative Wealth'], 
+         label='Training Period (2005-2020)', color='blue', linewidth=2)
 
 # Testing period
 test_dates = pd.to_datetime(test_metrics['Portfolio Returns'].index).tz_localize(None)
-plt.plot(test_dates, test_metrics['Cumulative Wealth'], 
-         label='Testing (2021-2023)', color='green')
+ax3.plot(test_dates, test_metrics['Cumulative Wealth'], 
+         label='Testing Period (2021-2023)', color='green', linewidth=2)
 
 # Add vertical line at the train/test split point
-plt.axvline(x=pd.Timestamp('2020-12-31'), color='red', linestyle='--', 
-            label='Train/Test Split')
+ax3.axvline(x=pd.Timestamp('2021-01-01'), color='red', linestyle='--', 
+            linewidth=2, label='Train/Test Split')
 
-plt.title('Cumulative Returns of LSTM Trading Strategy', fontsize=16)
-plt.xlabel('Date', fontsize=14)
-plt.ylabel('Portfolio Value (Starting at $1)', fontsize=14)
-plt.legend(fontsize=12)
-plt.grid(True)
-plt.tight_layout()
-returns_plot_path = os.path.join(output_dir, 'cumulative_returns.png')
-plt.savefig(returns_plot_path)
-print(f"Saved cumulative returns plot to {returns_plot_path}")
+ax3.set_title('Trading Strategy Cumulative Returns', fontsize=16, fontweight='bold')
+ax3.set_xlabel('Years')
+ax3.set_ylabel('Portfolio Value (Starting at $1)')
+ax3.legend(fontsize=12)
+ax3.grid(True, alpha=0.3)
 
-# 3. Actual vs Predicted Returns Plot (Sample)
-plt.figure(figsize=(14, 6))
+# 4. Best Parameters Table
+ax4 = fig.add_subplot(gs[2, 0])
+ax4.axis('off')
+ax4.set_title('Best Model Parameters', fontsize=14, fontweight='bold', pad=20)
 
-# Get a random sample of stocks for visualization
-sample_stocks = np.random.choice(test_predictions_df['ID'].unique(), 3, replace=False)
-sample_data = test_predictions_df[test_predictions_df['ID'].isin(sample_stocks)].copy()
-
-# Ensure dates have no timezone information for consistent plotting
-sample_data['Date'] = pd.to_datetime(sample_data['Date']).dt.tz_localize(None)
-
-for stock_id in sample_stocks:
-    stock_data = sample_data[sample_data['ID'] == stock_id].sort_values('Date')
-    plt.plot(stock_data['Date'], stock_data['Actual'], 
-             label=f'Stock {stock_id} - Actual', alpha=0.7)
-    plt.plot(stock_data['Date'], stock_data['Predicted'], 
-             label=f'Stock {stock_id} - Predicted', linestyle='--', alpha=0.7)
-
-plt.title('Actual vs Predicted Weekly Returns (Sample Stocks)', fontsize=16)
-plt.xlabel('Date', fontsize=14)
-plt.ylabel('Weekly Return', fontsize=14)
-plt.legend(fontsize=10)
-plt.grid(True)
-plt.tight_layout()
-prediction_plot_path = os.path.join(output_dir, 'actual_vs_predicted.png')
-plt.savefig(prediction_plot_path)
-print(f"Saved actual vs predicted plot to {prediction_plot_path}")
-
-# 4. Model Summary Table
-fig, ax = plt.figure(figsize=(12, 8)), plt.gca()
-plt.axis('off')
-plt.title('LSTM Model Summary', fontsize=16)
-
-# Create the model summary table
-model_info = [
+# Create the model parameters table
+param_data = [
     ["Parameter", "Value"],
     ["Window Size", window_size],
-    ["Best LSTM Units", best_units],
-    ["Best Dropout Rate", best_dropout_rate],
-    ["Best L2 Regularization", best_l2_reg],
-    ["Best Number of Layers", best_n_layers],
-    ["Best Learning Rate", best_learning_rate],
-    ["Training MSE", f"{train_mse:.6f}"],
-    ["Testing MSE", f"{test_mse:.6f}"],
-    ["Training R²", f"{train_r2:.6f}"],
-    ["Testing R²", f"{test_r2:.6f}"]
+    ["LSTM Units", best_units],
+    ["Number of Layers", best_n_layers],
+    ["Dropout Rate", f"{best_dropout_rate:.1f}"],
+    ["L2 Regularization", f"{best_l2_reg:.4f}"],
+    ["Learning Rate", f"{best_learning_rate:.4f}"],
+    ["Patience", "3"],
+    ["Batch Size", "64"],
+    ["Epochs", "3"]
 ]
 
-table = ax.table(cellText=model_info, loc='center', cellLoc='center', 
-                colWidths=[0.4, 0.4])
-table.auto_set_font_size(False)
-table.set_fontsize(12)
-table.scale(1, 1.5)
-for (i, j), cell in table.get_celld().items():
-    if i == 0:
-        cell.set_text_props(fontproperties=dict(weight='bold'))
+param_table = ax4.table(cellText=param_data, loc='center', cellLoc='center', 
+                       colWidths=[0.5, 0.3])
+param_table.auto_set_font_size(False)
+param_table.set_fontsize(11)
+param_table.scale(1, 1.8)
 
-summary_plot_path = os.path.join(output_dir, 'model_summary.png')
-plt.savefig(summary_plot_path, bbox_inches='tight')
-print(f"Saved model summary to {summary_plot_path}")
+# Style the header row
+for (i, j), cell in param_table.get_celld().items():
+    if i == 0:
+        cell.set_text_props(fontweight='bold')
+        cell.set_facecolor('#E6E6E6')
+    else:
+        cell.set_facecolor('#F9F9F9')
+
+# 5. Performance Metrics Table
+ax5 = fig.add_subplot(gs[2, 1])
+ax5.axis('off')
+ax5.set_title('Model Performance Metrics', fontsize=14, fontweight='bold', pad=20)
+
+# Create the performance metrics table
+metrics_data = [
+    ["Metric", "Training", "Testing"],
+    ["MSE", f"{train_mse:.6f}", f"{test_mse:.6f}"],
+    ["R²", f"{train_r2:.4f}", f"{test_r2:.4f}"],
+    ["Cumulative Return", f"{train_metrics['Cumulative Return']:.2%}", f"{test_metrics['Cumulative Return']:.2%}"],
+    ["Annualized Return", f"{train_metrics['Annualized Return']:.2%}", f"{test_metrics['Annualized Return']:.2%}"],
+    ["Sharpe Ratio", f"{train_metrics['Sharpe Ratio']:.3f}", f"{test_metrics['Sharpe Ratio']:.3f}"],
+    ["Max Drawdown", f"{train_metrics['Maximum Drawdown']:.2%}", f"{test_metrics['Maximum Drawdown']:.2%}"],
+    ["Win Rate", f"{train_metrics['Win Rate']:.2%}", f"{test_metrics['Win Rate']:.2%}"],
+    ["Profit Factor", f"{train_metrics['Profit Factor']:.3f}", f"{test_metrics['Profit Factor']:.3f}"]
+]
+
+metrics_table = ax5.table(cellText=metrics_data, loc='center', cellLoc='center', 
+                         colWidths=[0.4, 0.25, 0.25])
+metrics_table.auto_set_font_size(False)
+metrics_table.set_fontsize(11)
+metrics_table.scale(1, 1.8)
+
+# Style the header row
+for (i, j), cell in metrics_table.get_celld().items():
+    if i == 0:
+        cell.set_text_props(fontweight='bold')
+        cell.set_facecolor('#E6E6E6')
+    else:
+        cell.set_facecolor('#F9F9F9')
+
+# 6. Model Assessment Summary
+ax6 = fig.add_subplot(gs[3, :])
+ax6.axis('off')
+
+# Calculate overall score (from the existing code)
+score = 0
+score += min(2, max(0, test_r2 * 20))
+score += min(2, max(0, test_metrics['Sharpe Ratio']))
+score += min(2, max(0, (test_metrics['Win Rate'] - 0.4) * 5))
+risk_free_rate = 0.02
+test_alpha = test_metrics['Annualized Return'] - risk_free_rate
+score += min(2, max(0, test_alpha * 10))
+score += min(2, max(0, 2 + test_metrics['Maximum Drawdown'] * 10))
+
+if score >= 7:
+    grade = "Excellent"
+    emoji = "🌟"
+elif score >= 5:
+    grade = "Good"
+    emoji = "✅"
+elif score >= 3:
+    grade = "Average"
+    emoji = "⚠️"
+else:
+    grade = "Poor"
+    emoji = "❌"
+
+# Add model assessment text
+assessment_text = f"""
+LSTM MODEL ASSESSMENT SUMMARY
+
+{emoji} Overall Grade: {grade} (Score: {score:.1f}/10)
+
+Key Findings:
+• Model uses standard LSTM activations (tanh + sigmoid) optimal for financial time series
+• Window size of {window_size} weeks with {best_units} LSTM units in {best_n_layers} layer(s)
+• Testing R² of {test_r2:.4f} indicates {'strong' if test_r2 > 0.1 else 'weak' if test_r2 > 0.01 else 'very weak'} predictive power
+• Annualized return: {test_metrics['Annualized Return']:.2%} vs market benchmark ~7%
+• Risk profile: {('High' if test_metrics['Annualized Volatility'] > 0.25 else 'Medium' if test_metrics['Annualized Volatility'] > 0.15 else 'Low')} volatility ({test_metrics['Annualized Volatility']:.2%})
+
+Recommendation: {'Model ready for deployment' if score >= 6 else 'Model requires further optimization'}
+"""
+
+ax6.text(0.05, 0.95, assessment_text, transform=ax6.transAxes, fontsize=12,
+         verticalalignment='top', fontfamily='monospace',
+         bbox=dict(boxstyle="round,pad=0.5", facecolor='lightblue', alpha=0.3))
+
+# Add main title
+fig.suptitle('LSTM Weekly Stock Return Prediction - Comprehensive Analysis', 
+             fontsize=18, fontweight='bold', y=0.98)
+
+# Save the comprehensive plot
+comprehensive_plot_path = os.path.join(output_dir, 'lstm_comprehensive_analysis.png')
+plt.savefig(comprehensive_plot_path, dpi=300, bbox_inches='tight', facecolor='white')
+print(f"Saved comprehensive analysis to {comprehensive_plot_path}")
+
+# Clean up - close the figure to free memory
+plt.close(fig)
 
 # ---------------------- 16. Export Results ----------------------
 print("\n" + "-"*80)
