@@ -37,18 +37,24 @@ print("=" * 60)
 # Track execution time
 start_time = time.time()
 
-# ===== ZJEDNODUŠENÉ HYPERPARAMETRY PRO LADĚNÍ =====
+# ===== HYPERPARAMETER CONFIGURATION =====
 HYPERPARAMS = {
+    # Training configuration
     'final_model_epochs': 50,        # Maximální počet epoch pro FINÁLNÍ trénink
-    'cv_epochs': 10,                 # Počet epoch pro CROSS-VALIDATION (rychlejší)
+    'cv_epochs': 8,                 # Počet epoch pro CROSS-VALIDATION
     'patience': 5,                   # Early stopping patience
-    'batch_size': 64,               # Velikost batch
-    'learning_rate': 0.001,          # Learning rate
-    'hidden_layers': 2,              # HLAVNÍ PARAMETR: Počet skrytých vrstev (1, 2, nebo 3)
-    'neurons_per_layer': 64,        # Počet neuronů v každé skryté vrstvě (stejný pro všechny)
-    'dropout_rate': 0.1,               # Dropout rate
-    'l2_reg': 0.0001,                     # L2 regularizace
-    'cv_folds': 3                    # Počet foldů pro cross-validation (sníženo pro rychlost)
+    'cv_folds': 3,                   # Počet foldů pro cross-validation
+    'n_iter': 20,                    # Počet iterací pro RandomizedSearchCV
+    
+    # HYPERPARAMETER SEARCH SPACE - zde definujete prostor pro hledání
+    'search_space': {
+        'hidden_layers': [1, 2, 3],                           # Počet skrytých vrstev
+        'neurons_per_layer': [32, 64, 128],           # Neurony v každé vrstvě
+        'dropout_rate': [0.2],             # Dropout rate
+        'l2_reg': [0.001],                  # L2 regularizace
+        'learning_rate': [0.0001, 0.001, 0.01],                # Learning rate
+        'batch_size': [64]
+    }
 }
 
 # Data paths (adjust these paths according to your data location)
@@ -71,11 +77,11 @@ TEST_END_DATE = '2023-12-29'
 
 print(f"Training period: 2005 - {TRAIN_END_DATE}")
 print(f"Testing period: {TEST_START_DATE} - {TEST_END_DATE}")
-print(f"Hidden layers: {HYPERPARAMS['hidden_layers']}")
-print(f"Neurons per layer: {HYPERPARAMS['neurons_per_layer']}")
+print(f"RandomizedSearchCV iterations: {HYPERPARAMS['n_iter']}")
 print(f"Max epochs (final): {HYPERPARAMS['final_model_epochs']}")
 print(f"CV epochs: {HYPERPARAMS['cv_epochs']}")
 print(f"Cross-validation folds: {HYPERPARAMS['cv_folds']}")
+print(f"Search space combinations: {len(HYPERPARAMS['search_space']['hidden_layers']) * len(HYPERPARAMS['search_space']['neurons_per_layer']) * len(HYPERPARAMS['search_space']['dropout_rate']) * len(HYPERPARAMS['search_space']['l2_reg']) * len(HYPERPARAMS['search_space']['learning_rate']) * len(HYPERPARAMS['search_space']['batch_size']):,}")
 print()
 
 # ---------------------- 1. Data Loading and Preprocessing ----------------------
@@ -350,86 +356,89 @@ print("5. HYPERPARAMETER TUNING")
 print("=" * 60)
 
 def tune_hyperparameters(X_train, y_train):
-    """Zjednodušené ladění hyperparametrů - pouze cross-validation s přednastavenými parametry"""
+    """Skutečné ladění hyperparametrů pomocí RandomizedSearchCV"""
     
-    print("Spouštím zjednodušené ladění hyperparametrů...")
-    print("Používám přednastavené parametry z konfigurace")
+    print("=" * 60)
+    print("HYPERPARAMETER TUNING s RandomizedSearchCV")
+    print("=" * 60)
+    
+    # Získáme search space z konfigurace
+    search_space = HYPERPARAMS['search_space']
+    
+    print("🔍 SEARCH SPACE:")
+    for param, values in search_space.items():
+        print(f"  {param}: {values}")
     print()
     
-    # Použijeme přednastavené parametry z HYPERPARAMS
-    best_params = {
-        'hidden_layers': HYPERPARAMS['hidden_layers'],
-        'neurons_per_layer': HYPERPARAMS['neurons_per_layer'],
-        'dropout_rate': HYPERPARAMS['dropout_rate'],
-        'l2_reg': HYPERPARAMS['l2_reg'],
-        'learning_rate': HYPERPARAMS['learning_rate'],
-        'batch_size': HYPERPARAMS['batch_size']
-    }
+    total_combinations = 1
+    for values in search_space.values():
+        total_combinations *= len(values)
     
-    print("Parametry pro model:")
-    for key, value in best_params.items():
-        print(f"  {key}: {value}")
+    print(f"📊 KONFIGURACE:")
+    print(f"  RandomizedSearchCV iterace: {HYPERPARAMS['n_iter']}")
+    print(f"  Cross-validation folds: {HYPERPARAMS['cv_folds']}")
+    print(f"  Epochy pro CV: {HYPERPARAMS['cv_epochs']}")
+    print(f"  Celkem možných kombinací: {total_combinations:,}")
+    print(f"  Testuje se: {HYPERPARAMS['n_iter']}/{total_combinations} kombinací ({HYPERPARAMS['n_iter']/total_combinations*100:.1f}%)")
     print()
     
-    # Provedeme pouze jednoduché cross-validation pro ověření
-    print(f"Provádím {HYPERPARAMS['cv_folds']}-fold cross-validation pro ověření parametrů...")
+    # Vytvoříme KerasRegressor wrapper
+    model_wrapper = KerasRegressor(
+        model=create_mlp_model,
+        input_dim=X_train.shape[1],
+        epochs=HYPERPARAMS['cv_epochs'],
+        verbose=0  # Tichý režim pro rychlejší CV
+    )
     
+    # Nastavíme cross-validation
     cv = KFold(n_splits=HYPERPARAMS['cv_folds'], shuffle=True, random_state=42)
-    cv_scores = []
     
-    for fold, (train_idx, val_idx) in enumerate(cv.split(X_train)):
-        print(f"  Cross-validation fold {fold+1}/{HYPERPARAMS['cv_folds']}...")
-        
-        X_train_fold = X_train[train_idx]
-        X_val_fold = X_train[val_idx]
-        y_train_fold = y_train[train_idx]
-        y_val_fold = y_train[val_idx]
-        
-        # Vytvoříme a natrénujeme model
-        model = create_mlp_model(
-            input_dim=X_train.shape[1],
-            hidden_layers=best_params['hidden_layers'],
-            neurons_per_layer=best_params['neurons_per_layer'],
-            dropout_rate=best_params['dropout_rate'],
-            l2_reg=best_params['l2_reg'],
-            learning_rate=best_params['learning_rate']
-        )
-        
-        early_stopping = EarlyStopping(patience=10, restore_best_weights=True, verbose=1)
-        
-        print(f"    Trénink fold {fold+1}...")
-        print(f"    Velikost trénovacích dat: {X_train_fold.shape[0]:,} vzorků")
-        print(f"    Velikost validačních dat: {X_val_fold.shape[0]:,} vzorků")
-        print("    🚀 Zahájení tréninku fold...")
-        
-        history = model.fit(
-            X_train_fold, y_train_fold,
-            validation_data=(X_val_fold, y_val_fold),
-            epochs=HYPERPARAMS['cv_epochs'],  
-            batch_size=best_params['batch_size'],
-            callbacks=[early_stopping],
-            verbose=1  # Zobrazí progress každé epochy během CV
-        )
-        
-        # Vyhodnocení na validačním fold
-        print(f"    📊 Vytváření predikcí pro fold {fold+1}...")
-        val_pred = model.predict(X_val_fold, verbose=1)
-        mse = mean_squared_error(y_val_fold, val_pred)
-        cv_scores.append(mse)
-        
-        print(f"    ✅ Fold {fold+1} dokončen - MSE: {mse:.6f}")
-        print(f"    Počet epoch: {len(history.history['loss'])}")
-        print("    " + "-" * 40)
+    # Vytvoříme RandomizedSearchCV
+    print("🚀 SPOUŠTÍM RANDOMIZED SEARCH...")
+    print("=" * 60)
     
-    avg_score = np.mean(cv_scores)
-    std_score = np.std(cv_scores)
+    random_search = RandomizedSearchCV(
+        estimator=model_wrapper,
+        param_distributions=search_space,
+        n_iter=HYPERPARAMS['n_iter'],
+        cv=cv,
+        scoring='neg_mean_squared_error',
+        random_state=42,
+        verbose=2,  # Zobrazí progress
+        n_jobs=1    # Keras modely nejsou thread-safe
+    )
     
-    print(f"\nCross-validation dokončeno!")
-    print(f"Průměrné CV MSE: {avg_score:.6f} ± {std_score:.6f}")
-    print("Parametry potvrzeny pro finální trénink.")
+    # Spustíme search
+    print(f"Testování {HYPERPARAMS['n_iter']} kombinací hyperparametrů...")
+    random_search.fit(X_train, y_train)
+    
+    print("=" * 60)
+    print("✅ HYPERPARAMETER TUNING DOKONČEN!")
+    print("=" * 60)
+    
+    # Výsledky
+    best_params = random_search.best_params_
+    best_score = random_search.best_score_
+    
+    print("\n🏆 NEJLEPŠÍ PARAMETRY:")
+    for param, value in best_params.items():
+        print(f"  {param}: {value}")
+    
+    print(f"\n📊 NEJLEPŠÍ CV SKÓRE: {-best_score:.6f} (MSE)")
+    
+    # Všechny výsledky seřazené podle skóre
+    print(f"\n📋 TOP 5 KOMBINACÍ:")
+    results_df = pd.DataFrame(random_search.cv_results_)
+    top_results = results_df.nlargest(5, 'mean_test_score')[
+        ['params', 'mean_test_score', 'std_test_score']
+    ]
+    
+    for i, (idx, row) in enumerate(top_results.iterrows()):
+        print(f"  {i+1}. MSE: {-row['mean_test_score']:.6f} ± {row['std_test_score']:.6f}")
+        print(f"     Params: {row['params']}")
+    
     print()
-    
-    return best_params, -avg_score
+    return best_params, best_score
 
 # ---------------------- 6. Model Training ----------------------
 print("=" * 60)
@@ -479,7 +488,7 @@ def train_best_model(X_train, y_train, X_test, y_test, best_params):
     print(f"  Velikost testovacích dat: {X_test.shape[0]:,} vzorků")
     print()
     
-    # Trénink modelu s verbose=1 pro komunikaci během tréninku
+    # Trénink modelu
     print("🚀 ZAHÁJENÍ TRÉNINKU...")
     print("=" * 50)
     
