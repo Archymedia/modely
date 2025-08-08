@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 MLP Model for Stock Return Prediction and Trading Strategy
 Author: Assistant
@@ -1362,4 +1361,4 @@ def main():
 if __name__ == "__main__":
     success = main()
     if not success:
-        print("\nExecution failed. Please review the error messages above.")2
+        print("\nExecution failed. Please review the error messages above.")
