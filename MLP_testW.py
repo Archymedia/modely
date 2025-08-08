@@ -48,12 +48,16 @@ HYPERPARAMS = {
     
     # HYPERPARAMETER SEARCH SPACE - zde definujete prostor pro hledání
     'search_space': {
-        'hidden_layers': [1, 2, 3],                           # Počet skrytých vrstev
-        'neurons_per_layer': [32, 64, 128],           # Neurony v každé vrstvě
-        'dropout_rate': [0.2],             # Dropout rate
-        'l2_reg': [0.001],                  # L2 regularizace
-        'learning_rate': [0.0001, 0.001, 0.01],                # Learning rate
-        'batch_size': [64]
+        'hidden_layers': [1, 2, 3],                                  # Počet skrytých vrstev: 3 možnosti
+        'neurons_per_layer': [32, 64, 128],                     # Neurony v každé vrstvě: 3 možnosti
+        'learning_rate': [0.0001, 0.001, 0.01]                      # Learning rate: 3 možnosti
+    },
+    
+    # FIXNÍ PARAMETRY - tyto se nebudou tunovat
+    'fixed_params': {
+        'batch_size': 64,                                            # Fixní batch size
+        'dropout_rate': 0.2,                                         # Fixní dropout rate
+        'l2_reg': 0.001                                              # Fixní L2 regularizace
     }
 }
 
@@ -81,7 +85,8 @@ print(f"RandomizedSearchCV iterations: {HYPERPARAMS['n_iter']}")
 print(f"Max epochs (final): {HYPERPARAMS['final_model_epochs']}")
 print(f"CV epochs: {HYPERPARAMS['cv_epochs']}")
 print(f"Cross-validation folds: {HYPERPARAMS['cv_folds']}")
-print(f"Search space combinations: {len(HYPERPARAMS['search_space']['hidden_layers']) * len(HYPERPARAMS['search_space']['neurons_per_layer']) * len(HYPERPARAMS['search_space']['dropout_rate']) * len(HYPERPARAMS['search_space']['l2_reg']) * len(HYPERPARAMS['search_space']['learning_rate']) * len(HYPERPARAMS['search_space']['batch_size']):,}")
+print(f"Search space combinations: {len(HYPERPARAMS['search_space']['hidden_layers']) * len(HYPERPARAMS['search_space']['neurons_per_layer']) * len(HYPERPARAMS['search_space']['learning_rate']):,}")
+print(f"Fixed parameters: batch_size={HYPERPARAMS['fixed_params']['batch_size']}, dropout_rate={HYPERPARAMS['fixed_params']['dropout_rate']}, l2_reg={HYPERPARAMS['fixed_params']['l2_reg']}")
 print()
 
 # ---------------------- 1. Data Loading and Preprocessing ----------------------
@@ -315,12 +320,22 @@ print("=" * 60)
 print("4. MLP MODEL DEFINITION")
 print("=" * 60)
 
-def create_mlp_model(input_dim, hidden_layers=2, neurons_per_layer=100, 
-                     dropout_rate=0.3, l2_reg=0.01, learning_rate=0.001, 
-                     meta=None, compile_kwargs=None):
+def create_mlp_model(input_dim, hidden_layers=None, neurons_per_layer=None, 
+                     learning_rate=None, meta=None, compile_kwargs=None):
     """Create MLP model with specified architecture - všechny hidden vrstvy mají stejný počet neuronů"""
     
-    print(f"    Creating model: {hidden_layers} hidden layers, {neurons_per_layer} neurons each")
+    # Kontrola, že všechny tunovací parametry byly předány z RandomizedSearchCV
+    if any(param is None for param in [hidden_layers, neurons_per_layer, learning_rate]):
+        raise ValueError("Všechny tunovací hyperparametry musí být definovány v search_space!")
+    
+    # Získání fixních parametrů
+    dropout_rate = HYPERPARAMS['fixed_params']['dropout_rate']
+    l2_reg = HYPERPARAMS['fixed_params']['l2_reg']
+    
+    # Při ladění hyperparametrů se toto nevypisuje (verbose=0 v CV)
+    if meta is None:  # Pouze při manuálním volání
+        print(f"    Creating model: {hidden_layers} hidden layers, {neurons_per_layer} neurons each")
+        print(f"    Fixed params: dropout={dropout_rate}, l2_reg={l2_reg}")
     
     model = Sequential()
     
@@ -333,7 +348,8 @@ def create_mlp_model(input_dim, hidden_layers=2, neurons_per_layer=100,
     
     # Další skryté vrstvy (všechny mají stejný počet neuronů)
     for layer_num in range(2, hidden_layers + 1):
-        print(f"    Adding hidden layer {layer_num} with {neurons_per_layer} neurons")
+        if meta is None:  # Pouze při manuálním volání
+            print(f"    Adding hidden layer {layer_num} with {neurons_per_layer} neurons")
         model.add(Dense(neurons_per_layer, 
                        activation='tanh',
                        kernel_regularizer=l2(l2_reg)))
@@ -346,7 +362,8 @@ def create_mlp_model(input_dim, hidden_layers=2, neurons_per_layer=100,
     optimizer = Adam(learning_rate=learning_rate)
     model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
     
-    print(f"    Model compiled with learning rate: {learning_rate}")
+    if meta is None:  # Pouze při manuálním volání
+        print(f"    Model compiled with learning rate: {learning_rate}")
     
     return model
 
@@ -362,16 +379,21 @@ def tune_hyperparameters(X_train, y_train):
     print("HYPERPARAMETER TUNING s RandomizedSearchCV")
     print("=" * 60)
     
-    # Získáme search space z konfigurace
-    search_space = HYPERPARAMS['search_space']
+    # Získáme search space z konfigurace a přidáme model__ prefix
+    search_space_raw = HYPERPARAMS['search_space']
+    search_space = {}
+    
+    # Přidáme model__ prefix pro parametry modelu
+    for param, values in search_space_raw.items():
+        search_space[f'model__{param}'] = values
     
     print("🔍 SEARCH SPACE:")
-    for param, values in search_space.items():
+    for param, values in search_space_raw.items():
         print(f"  {param}: {values}")
     print()
     
     total_combinations = 1
-    for values in search_space.values():
+    for values in search_space_raw.values():
         total_combinations *= len(values)
     
     print(f"📊 KONFIGURACE:")
@@ -382,12 +404,14 @@ def tune_hyperparameters(X_train, y_train):
     print(f"  Testuje se: {HYPERPARAMS['n_iter']}/{total_combinations} kombinací ({HYPERPARAMS['n_iter']/total_combinations*100:.1f}%)")
     print()
     
-    # Vytvoříme KerasRegressor wrapper
+    # Vytvoříme KerasRegressor wrapper - bez přednastavených hodnot pro ladění
     model_wrapper = KerasRegressor(
         model=create_mlp_model,
         input_dim=X_train.shape[1],
         epochs=HYPERPARAMS['cv_epochs'],
-        verbose=0  # Tichý režim pro rychlejší CV
+        batch_size=HYPERPARAMS['fixed_params']['batch_size'],
+        verbose=1  # Verbose režim pro podrobnější výstup
+        # Parametry pro ladění budou nastaveny RandomizedSearchCV s model__ prefix
     )
     
     # Nastavíme cross-validation
@@ -454,8 +478,10 @@ def train_best_model(X_train, y_train, X_test, y_test, best_params):
     
     print("Vytváření finálního modelu s parametry:")
     for key, value in best_params.items():
-        if key != 'batch_size':
-            print(f"  {key}: {value}")
+        print(f"  {key}: {value}")
+    print(f"  batch_size (fixed): {HYPERPARAMS['fixed_params']['batch_size']}")
+    print(f"  dropout_rate (fixed): {HYPERPARAMS['fixed_params']['dropout_rate']}")
+    print(f"  l2_reg (fixed): {HYPERPARAMS['fixed_params']['l2_reg']}")
     print()
     
     # Vytvoření modelu s nejlepšími parametry
@@ -463,8 +489,6 @@ def train_best_model(X_train, y_train, X_test, y_test, best_params):
         input_dim=X_train.shape[1],
         hidden_layers=best_params['hidden_layers'],
         neurons_per_layer=best_params['neurons_per_layer'],
-        dropout_rate=best_params['dropout_rate'],
-        l2_reg=best_params['l2_reg'],
         learning_rate=best_params['learning_rate']
     )
     
@@ -482,7 +506,7 @@ def train_best_model(X_train, y_train, X_test, y_test, best_params):
     
     print(f"Zahájení tréninku:")
     print(f"  Maximální epochy: {HYPERPARAMS['final_model_epochs']}")
-    print(f"  Batch size: {best_params['batch_size']}")
+    print(f"  Batch size: {HYPERPARAMS['fixed_params']['batch_size']}")
     print(f"  Early stopping patience: {HYPERPARAMS['patience']}")
     print(f"  Velikost trénovacích dat: {X_train.shape[0]:,} vzorků")
     print(f"  Velikost testovacích dat: {X_test.shape[0]:,} vzorků")
@@ -496,7 +520,7 @@ def train_best_model(X_train, y_train, X_test, y_test, best_params):
         X_train, y_train,
         validation_data=(X_test, y_test),
         epochs=HYPERPARAMS['final_model_epochs'],
-        batch_size=best_params['batch_size'],
+        batch_size=HYPERPARAMS['fixed_params']['batch_size'],
         callbacks=[early_stopping],
         verbose=1  # Zobrazí progress bar pro každou epochu
     )
@@ -1338,4 +1362,4 @@ def main():
 if __name__ == "__main__":
     success = main()
     if not success:
-        print("\nExecution failed. Please review the error messages above.")
+        print("\nExecution failed. Please review the error messages above.")2
