@@ -39,11 +39,11 @@ start_time = time.time()
 # ===== HYPERPARAMETER CONFIGURATION =====
 HYPERPARAMS = {
     # Training configuration
-    'final_model_epochs': 3,        # Maximální počet epoch pro FINÁLNÍ trénink
-    'cv_epochs': 3,                 # Počet epoch pro CROSS-VALIDATION
-    'patience': 2,                   # Early stopping patience
-    'cv_folds': 2,                   # Počet foldů pro cross-validation
-    'n_iter': 1,                    # Počet iterací pro RandomizedSearchCV
+    'final_model_epochs': 50,        # Maximální počet epoch pro FINÁLNÍ trénink
+    'cv_epochs': 8,                 # Počet epoch pro CROSS-VALIDATION
+    'patience': 5,                   # Early stopping patience
+    'cv_folds': 3,                   # Počet foldů pro cross-validation
+    'n_iter': 20,                    # Počet iterací pro RandomizedSearchCV
     
     # HYPERPARAMETER SEARCH SPACE - zde definujete prostor pro hledání
     'search_space': {
