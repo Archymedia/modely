@@ -1,7 +1,4 @@
 """
-MLP Model for Stock Return Prediction and Trading Strategy
-Author: Assistant
-Date: 2025-08-08
 Description: Daily stock return prediction using MLP with technical indicators and trading strategy
 """
 
