@@ -38,22 +38,22 @@ HYPERPARAMS = {
     # Training configuration
     'final_model_epochs': 100,       # Maximální počet epoch pro FINÁLNÍ trénink (zvýšeno z 3)
     'cv_epochs': 20,                 # Počet epoch pro CROSS-VALIDATION (zvýšeno z 3)
-    'patience': 10,                  # Early stopping patience (zvýšeno z 2)
-    'cv_folds': 3,                   # Počet foldů pro cross-validation
+    'patience': 10,
+    'cv_folds': 3,
     'n_iter': 20,                    # Počet iterací pro RandomizedSearchCV (zvýšeno z 1)
     
     # HYPERPARAMETER SEARCH SPACE - zde definujete prostor pro hledání
     'search_space': {
-        'hidden_layers': [1, 2, 3],                                  # Počet skrytých vrstev: 3 možnosti
-        'neurons_per_layer': [32, 64, 128],                     # Neurony v každé vrstvě: 3 možnosti
-        'learning_rate': [0.0001, 0.001, 0.01]                      # Learning rate: 3 možnosti
+        'hidden_layers': [1, 2, 3],
+        'neurons_per_layer': [32, 64, 128],
+        'learning_rate': [0.0001, 0.001, 0.01]
     },
     
     # FIXNÍ PARAMETRY - tyto se nebudou tunovat
     'fixed_params': {
-        'batch_size': 64,                                            # Fixní batch size
-        'dropout_rate': 0.2,                                         # Fixní dropout rate
-        'l2_reg': 0.001                                              # Fixní L2 regularizace
+        'batch_size': 64,                                            # Fixní 
+        'dropout_rate': 0.2,                                         # Fixní
+        'l2_reg': 0.001                                              # Fixní
     }
 }
 
