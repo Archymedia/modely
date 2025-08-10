@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RNN_full5.py
+RNN_full6.py
 Vanilla SimpleRNN for next-day Z-score simple return prediction and trading strategy backtest.
 
-- Dict-style HYPERPARAMS configuration (as requested), keeping names this script needs.
-- Target: next-day SimpleReturn Z-score (computed without data leakage).
-- Strategy: daily top 10 long & bottom 10 short, PT/SL = ±2%, hold until barrier.
-- One PNG summary: loss curve, equity curve (vline 2020-12-31), tables.
+Updates in this version:
+- Cross-validation uses TimeSeriesSplit (respects temporal order).
+- Strategy simulator records trade-level data (entry/exit, return, holding days, reason TP/SL).
+- Added trade-level metrics and included them in the PNG summary table and terminal output.
+- FIX: SciKeras param grid now uses 'model__' prefix (prevents "invalid parameter units" error).
 """
 
 import os
@@ -31,37 +32,40 @@ from tensorflow.keras.optimizers import Adam
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 
-from sklearn.model_selection import KFold, RandomizedSearchCV
 try:
     # Prefer scikeras if available
     from scikeras.wrappers import KerasRegressor
+    USE_SCIKERAS = True
 except Exception:
     from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
+    USE_SCIKERAS = False
 
 
 # ===== HYPERPARAMETER CONFIGURATION =====
 HYPERPARAMS = {
     # DATA & SPLIT
     'data': {
-        'data_path': '9DATA_FINAL.csv',
-        'vix_path': 'VIX_2005_2023.csv',
+        'data_path': "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/9DATA_FINAL.csv",
+        'vix_path': "/Users/lindawaisova/Desktop/DP/data/SP_100/VIX/VIX_2005_2023.csv",
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
     },
 
     # Training configuration
-    'final_model_epochs': 150,        # Počet epoch pro finální trénink
-    'cv_epochs': 50,                  # Počet epoch pro cross-validation
-    'patience': 25,
-    'cv_folds': 3,
-    'n_iter': 20, 
+    'final_model_epochs': 2,        # Počet epoch pro finální trénink
+    'cv_epochs': 2,                  # Počet epoch pro cross-validation (nižší kvůli rychlosti)
+    'patience': 1,
+    'cv_folds': 2,
+    'n_iter': 1, 
 
     # HYPERPARAMETER SEARCH SPACE
     'search_space': {
         'rnn_layers': [1, 2, 3],
         'neurons_per_layer': [32, 64, 128],
         'learning_rate': [0.0001, 0.001, 0.01]
+        # optionally: 'l2_reg': [0.0, 1e-4, 1e-3], 'dropout_rate': [0.0, 0.1, 0.2, 0.3]
     },
 
     # FIXNÍ PARAMETRY (netunované)
@@ -354,6 +358,7 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
 
     positions = {}
     daily_returns = []
+    trades = []  # record finished trades
 
     # Precompute per-ID close series for barrier math
     close_series = {sid: ts[ts['ID']==sid].set_index('Date')['CloseAdj'].sort_index() for sid in ts['ID'].unique()}
@@ -366,7 +371,6 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
             if (sid, D) not in df.index:
                 continue
             row = df.loc[(sid, D)]
-            close_today = row['CloseAdj']
             high_today  = row['HighAdj']
             low_today   = row['LowAdj']
             daily_mtm   = close_ret_map.get((sid, D), 0.0)
@@ -393,6 +397,18 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
                         ret_until_prev = 0.0
                     today_contrib = total_ret - ret_until_prev
                     todays_pos_returns.append(today_contrib)
+
+                    trades.append({
+                        "ID": sid,
+                        "direction": "long",
+                        "entry_date": pos.entry_date,
+                        "exit_date": D,
+                        "entry_price": pos.entry_price,
+                        "exit_price": exit_price,
+                        "return_trade": total_ret,
+                        "holding_days": int((pd.to_datetime(D) - pd.to_datetime(pos.entry_date)).days),
+                        "reason": "TP" if (hit_tp and not hit_sl) else ("SL" if (hit_sl and not hit_tp) else "SL")
+                    })
                     positions.pop(sid, None)
                 else:
                     todays_pos_returns.append(daily_mtm)
@@ -418,6 +434,18 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
                         ret_until_prev = 0.0
                     today_contrib = total_ret - ret_until_prev
                     todays_pos_returns.append(today_contrib)
+
+                    trades.append({
+                        "ID": sid,
+                        "direction": "short",
+                        "entry_date": pos.entry_date,
+                        "exit_date": D,
+                        "entry_price": pos.entry_price,
+                        "exit_price": exit_price,
+                        "return_trade": total_ret,
+                        "holding_days": int((pd.to_datetime(D) - pd.to_datetime(pos.entry_date)).days),
+                        "reason": "TP" if (hit_tp and not hit_sl) else ("SL" if (hit_sl and not hit_tp) else "SL")
+                    })
                     positions.pop(sid, None)
                 else:
                     todays_pos_returns.append(-daily_mtm)
@@ -447,7 +475,8 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
     df_ret = pd.DataFrame(daily_returns, columns=['Date','strategy_ret','market_ret']).sort_values('Date')
     df_ret['cum_strategy'] = (1 + df_ret['strategy_ret']).cumprod()
     df_ret['cum_market'] = (1 + df_ret['market_ret']).cumprod()
-    return df_ret
+    df_trades = pd.DataFrame(trades)
+    return df_ret, df_trades
 
 # =========================
 # METRICS
@@ -497,7 +526,7 @@ def compute_strategy_metrics(df_ret: pd.DataFrame):
     beta = beta_hat[1]
     alpha_ann = alpha_daily * 252
 
-    # t-stats
+    # t-stats (homoskedastic; pro striktnost lze nahradit HAC/Newey-West)
     resid = ex_p - X @ beta_hat
     s2 = (resid**2).sum() / (len(ex_p) - 2) if len(ex_p) > 2 else np.nan
     var_alpha = s2 * np.linalg.inv(X.T @ X)[0,0] if isinstance(s2, float) else np.nan
@@ -520,45 +549,77 @@ def compute_strategy_metrics(df_ret: pd.DataFrame):
         't_mean_excess': t_mean,
     }
 
+def compute_trade_metrics(df_tr: pd.DataFrame):
+    if df_tr is None or df_tr.empty:
+        return {
+            "n_trades": 0,
+            "win_rate_trades": np.nan,
+            "profit_factor_trades": np.nan,
+            "avg_trade_return": np.nan,
+            "median_trade_return": np.nan,
+            "avg_holding_days": np.nan,
+            "median_holding_days": np.nan,
+            "share_TP": np.nan,
+            "share_SL": np.nan,
+        }
+    wins = df_tr.loc[df_tr['return_trade'] > 0, 'return_trade']
+    losses = df_tr.loc[df_tr['return_trade'] < 0, 'return_trade']
+    return {
+        "n_trades": int(len(df_tr)),
+        "win_rate_trades": float((df_tr['return_trade'] > 0).mean()) if len(df_tr)>0 else np.nan,
+        "profit_factor_trades": float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else np.nan,
+        "avg_trade_return": float(df_tr['return_trade'].mean()),
+        "median_trade_return": float(df_tr['return_trade'].median()),
+        "avg_holding_days": float(df_tr['holding_days'].mean()),
+        "median_holding_days": float(df_tr['holding_days'].median()),
+        "share_TP": float((df_tr['reason'] == 'TP').mean()),
+        "share_SL": float((df_tr['reason'] == 'SL').mean()),
+    }
+
 
 # =========================
 # HYPERPARAMETER TUNING
 # =========================
 def random_search_tuning(X_train_seq, y_train):
-    print("[STEP] RandomizedSearchCV tuning...")
+    print("[STEP] RandomizedSearchCV tuning (TimeSeriesSplit)...")
     timesteps = X_train_seq.shape[1]
     input_dim = X_train_seq.shape[2]
 
     # Wrap builder
-    reg = KerasRegressor(
-        model=build_rnn_model_for_search,
-        model__input_timesteps=timesteps,
-        model__input_dim=input_dim,
-        verbose=0,
-        epochs=HYPERPARAMS['cv_epochs'],
-        batch_size=FIX['batch_size']
-    ) if 'scikeras' in str(type(KerasRegressor)) else KerasRegressor(
-        build_fn=lambda rnn_layers, units, learning_rate, l2_reg, dropout_rate: build_rnn_model_for_search(
-            rnn_layers=rnn_layers, units=units, learning_rate=learning_rate, l2_reg=l2_reg,
-            dropout_rate=dropout_rate, input_timesteps=timesteps, input_dim=input_dim
-        ),
-        epochs=HYPERPARAMS['cv_epochs'],
-        batch_size=FIX['batch_size'],
-        verbose=0
-    )
+    if USE_SCIKERAS:
+        reg = KerasRegressor(
+            model=build_rnn_model_for_search,
+            model__input_timesteps=timesteps,
+            model__input_dim=input_dim,
+            verbose=0,
+            epochs=HYPERPARAMS['cv_epochs'],
+            batch_size=FIX['batch_size']
+        )
+    else:
+        reg = KerasRegressor(
+            build_fn=lambda rnn_layers, units, learning_rate, l2_reg, dropout_rate: build_rnn_model_for_search(
+                rnn_layers=rnn_layers, units=units, learning_rate=learning_rate, l2_reg=l2_reg,
+                dropout_rate=dropout_rate, input_timesteps=timesteps, input_dim=input_dim
+            ),
+            epochs=HYPERPARAMS['cv_epochs'],
+            batch_size=FIX['batch_size'],
+            verbose=0
+        )
 
-    # Map search space keys
+    # Map search space keys (SciKeras needs 'model__' prefix)
     space = HYPERPARAMS['search_space']
     param_dist = {}
-    # Allow these keys; fall back to FIX for l2/dropout if not provided in space
-    if 'rnn_layers' in space: param_dist['rnn_layers'] = space['rnn_layers']
-    if 'neurons_per_layer' in space: param_dist['units'] = space['neurons_per_layer']
-    if 'learning_rate' in space: param_dist['learning_rate'] = space['learning_rate']
-    # Optionally include l2/dropout
-    if 'l2_reg' in space: param_dist['l2_reg'] = space['l2_reg']
-    if 'dropout_rate' in space: param_dist['dropout_rate'] = space['dropout_rate']
 
-    cv = KFold(n_splits=HYPERPARAMS['cv_folds'], shuffle=True, random_state=FIX['random_seed'])
+    def key(k):
+        return f"model__{k}" if USE_SCIKERAS else k
+
+    if 'rnn_layers' in space:        param_dist[key('rnn_layers')]    = space['rnn_layers']
+    if 'neurons_per_layer' in space: param_dist[key('units')]         = space['neurons_per_layer']
+    if 'learning_rate' in space:     param_dist[key('learning_rate')] = space['learning_rate']
+    if 'l2_reg' in space:            param_dist[key('l2_reg')]        = space['l2_reg']
+    if 'dropout_rate' in space:      param_dist[key('dropout_rate')]  = space['dropout_rate']
+
+    cv = TimeSeriesSplit(n_splits=HYPERPARAMS['cv_folds'])
 
     rnd = RandomizedSearchCV(
         estimator=reg,
@@ -598,7 +659,7 @@ def random_search_tuning(X_train_seq, y_train):
 # =========================
 # VISUALIZATION
 # =========================
-def save_summary_png(history, df_ret, reg_metrics: dict, model_info: dict, out_path="RNN_results.png"):
+def save_summary_png(history, df_ret, df_trades, reg_metrics: dict, model_info: dict, out_path="RNN_results.png"):
     print("\n[INFO] Saving summary PNG ->", out_path)
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
@@ -635,17 +696,20 @@ def save_summary_png(history, df_ret, reg_metrics: dict, model_info: dict, out_p
     table.scale(1.2, 1.2)
     ax.set_title('RNN Hyperparameters & Settings', pad=12)
 
-    # 4) Table: regression & strategy metrics
+    # 4) Table: regression, strategy & trade metrics
     ax = axes[1,1]
     ax.axis('off')
     strat_metrics = compute_strategy_metrics(df_ret)
+    trade_metrics = compute_trade_metrics(df_trades)
+
     def fmt(v, pct=False):
         if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
             return 'NaN'
         if pct:
             return f"{v*100:.2f}%"
         return f"{v:.4f}"
-    table_rows = [
+
+    rows_top = [
         ['MSE', fmt(reg_metrics.get('MSE'))],
         ['MAE', fmt(reg_metrics.get('MAE'))],
         ['RMSE', fmt(reg_metrics.get('RMSE'))],
@@ -654,18 +718,32 @@ def save_summary_png(history, df_ret, reg_metrics: dict, model_info: dict, out_p
         ['Ann. Vol', fmt(strat_metrics.get('Ann_Vol'))],
         ['Sharpe', fmt(strat_metrics.get('Sharpe'))],
         ['Max DD', fmt(strat_metrics.get('Max_Drawdown'), pct=True)],
-        ['Win Rate', fmt(strat_metrics.get('Win_Rate'), pct=True)],
-        ['Profit Factor', fmt(strat_metrics.get('Profit_Factor'))],
+        ['Win Rate (daily)', fmt(strat_metrics.get('Win_Rate'), pct=True)],
+        ['Profit Factor (daily)', fmt(strat_metrics.get('Profit_Factor'))],
         ['Alpha (ann.)', fmt(strat_metrics.get('Alpha_ann'))],
         ['Beta', fmt(strat_metrics.get('Beta'))],
         ['t(alpha)', fmt(strat_metrics.get('t_alpha'))],
         ['t(mean excess)', fmt(strat_metrics.get('t_mean_excess'))],
     ]
+
+    rows_trade = [
+        ['Trades (count)', f"{int(trade_metrics.get('n_trades', 0))}"],
+        ['Win Rate (trades)', fmt(trade_metrics.get('win_rate_trades'), pct=True)],
+        ['Profit Factor (trades)', fmt(trade_metrics.get('profit_factor_trades'))],
+        ['Avg Trade Return', fmt(trade_metrics.get('avg_trade_return'))],
+        ['Median Trade Return', fmt(trade_metrics.get('median_trade_return'))],
+        ['Avg Holding Days', f"{trade_metrics.get('avg_holding_days'):.1f}" if not np.isnan(trade_metrics.get('avg_holding_days', np.nan)) else 'NaN'],
+        ['Median Holding Days', f"{trade_metrics.get('median_holding_days'):.0f}" if not np.isnan(trade_metrics.get('median_holding_days', np.nan)) else 'NaN'],
+        ['Share TP', fmt(trade_metrics.get('share_TP'), pct=True)],
+        ['Share SL', fmt(trade_metrics.get('share_SL'), pct=True)],
+    ]
+
+    table_rows = rows_top + rows_trade
     table2 = ax.table(cellText=table_rows, colLabels=['Metric', 'Value'], loc='center')
     table2.auto_set_font_size(False)
     table2.set_fontsize(9)
-    table2.scale(1.2, 1.2)
-    ax.set_title('Regression & Strategy Metrics', pad=12)
+    table2.scale(1.1, 1.0)
+    ax.set_title('Regression, Strategy & Trade Metrics', pad=12)
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
@@ -708,11 +786,11 @@ def main():
     X_train_seq = transform_seq(X_train_seq)
     X_test_seq  = transform_seq(X_test_seq)
 
-    # Tuning
+    # Tuning (TimeSeriesSplit)
     best = random_search_tuning(X_train_seq, y_train)
 
     # Model with best params
-    print("[STEP] Compiling FINAL RNN model with best hyperparameters...")
+    print("[STEP] Compiling FINAL RNN model with best hyperparameters...]")
     final_units = int(best.get('units', 64))
     final_layers = int(best.get('rnn_layers', 2))
     final_lr = float(best.get('learning_rate', 0.001))
@@ -737,10 +815,16 @@ def main():
     model = make_final_model()
     print(model.summary())
 
-    # Train final
+    # Train final (keep time order in validation split by taking last 10% as val)
     print("[STEP] Training FINAL model...")
     es = EarlyStopping(monitor='val_loss', patience=HYPERPARAMS['patience'], restore_best_weights=True, verbose=1)
-    X_tr, X_val, y_tr, y_val = train_test_split(X_train_seq, y_train, test_size=0.1, random_state=FIX['random_seed'])
+
+    # Time-based validation: last 10% of sequences as validation
+    n_train = X_train_seq.shape[0]
+    val_size = max(1, int(0.1 * n_train))
+    X_tr, X_val = X_train_seq[:-val_size], X_train_seq[-val_size:]
+    y_tr, y_val = y_train[:-val_size], y_train[-val_size:]
+
     history = model.fit(
         X_tr, y_tr,
         validation_data=(X_val, y_val),
@@ -761,7 +845,7 @@ def main():
         print(f"  {k}: {v:.6f}")
 
     # Build per-day predictions dataframe for ranking
-    print("[STEP] Building prediction DataFrame for ranking...")
+    print("[STEP] Building prediction DataFrame for ranking...]")
     meta = []
     X_list = []
     for sid, s in test_df.groupby('ID', sort=False):
@@ -784,9 +868,18 @@ def main():
     else:
         pred_df = pd.DataFrame(columns=['ID','Date','pred'])
 
-    # Strategy simulation
+    # Strategy simulation (returns df_ret + df_trades)
     print("[STEP] Simulating trading strategy (PT/SL, hold-until-barrier)...")
-    df_ret = simulate_strategy(test_df[['ID','Date','CloseAdj','HighAdj','LowAdj','SimpleReturn']].copy(), pred_df)
+    df_ret, df_trades = simulate_strategy(test_df[['ID','Date','CloseAdj','HighAdj','LowAdj','SimpleReturn']].copy(), pred_df)
+
+    # Trade-level metrics
+    trade_metrics = compute_trade_metrics(df_trades)
+    print("\n[RESULT] Trade-level metrics:")
+    for k, v in trade_metrics.items():
+        if isinstance(v, float):
+            print(f"  {k}: {v:.6f}")
+        else:
+            print(f"  {k}: {v}")
 
     # Model info table
     model_info = {
@@ -812,7 +905,7 @@ def main():
     }
 
     # Visualization
-    save_summary_png(history, df_ret, reg_metrics, model_info, out_path="RNN_results.png")
+    save_summary_png(history, df_ret, df_trades, reg_metrics, model_info, out_path="RNN_results.png")
 
     t1 = time.time()
     print("\n" + "="*80)
