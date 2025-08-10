@@ -1,8 +1,7 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RNN_full.py
+RNN_full5.py
 Vanilla SimpleRNN for next-day Z-score simple return prediction and trading strategy backtest.
 
 - Dict-style HYPERPARAMS configuration (as requested), keeping names this script needs.
@@ -58,7 +57,7 @@ HYPERPARAMS = {
     'cv_folds': 3,
     'n_iter': 20, 
 
-    # HYPERPARAMETER SEARCH SPACE - rezerva pro budoucí ladění
+    # HYPERPARAMETER SEARCH SPACE
     'search_space': {
         'rnn_layers': [1, 2, 3],
         'neurons_per_layer': [32, 64, 128],
@@ -67,12 +66,11 @@ HYPERPARAMS = {
 
     # FIXNÍ PARAMETRY (netunované)
     'fixed_params': {
-        'batch_size': 64,
-        'dropout_rate': 0.20,
-        'l2_reg': 0.001,
-        'timesteps': 5,
+        'batch_size': 128,
+        'dropout_rate': 0.15,
+        'l2_reg': 0.0003,
+        'timesteps': 10, # Počet časových kroků pro RNN
         'random_seed': 42,
-        # RNN architecture
     },
 
     # STRATEGY
@@ -374,29 +372,52 @@ def simulate_strategy(test_df: pd.DataFrame, pred_df: pd.DataFrame):
             daily_mtm   = close_ret_map.get((sid, D), 0.0)
 
             pos = positions[sid]
-            if pos.direction == +1:
+            if pos.direction == +1:  # LONG
                 tp = pos.entry_price * (1 + STR['pt_pct'])
                 sl = pos.entry_price * (1 - STR['sl_pct'])
                 hit_tp = (high_today >= tp)
                 hit_sl = (low_today  <= sl)
                 if hit_tp or hit_sl:
-                    # exit at barrier; conservative tie -> SL
-                    ret_total = (STR['pt_pct'] if (hit_tp and not hit_sl) else
-                                 (-STR['sl_pct'] if (hit_sl and not hit_tp) else -STR['sl_pct']))
-                    # approximate daily contribution on exit day
-                    todays_pos_returns.append(ret_total)
+                    entry_close = pos.entry_price
+                    exit_price = tp if (hit_tp and not hit_sl) else (sl if (hit_sl and not hit_tp) else sl)
+                    total_ret = (exit_price / entry_close) - 1.0
+                    cs = close_series.get(sid)
+                    if cs is not None:
+                        prev_dates = cs.index[cs.index < D]
+                        if len(prev_dates) and prev_dates.min() <= pos.entry_date:
+                            prev_day = prev_dates.max()
+                            ret_until_prev = (cs.loc[prev_day] / entry_close) - 1.0
+                        else:
+                            ret_until_prev = 0.0
+                    else:
+                        ret_until_prev = 0.0
+                    today_contrib = total_ret - ret_until_prev
+                    todays_pos_returns.append(today_contrib)
                     positions.pop(sid, None)
                 else:
                     todays_pos_returns.append(daily_mtm)
-            else:
+
+            else:  # SHORT
                 tp = pos.entry_price * (1 - STR['pt_pct'])
                 sl = pos.entry_price * (1 + STR['sl_pct'])
                 hit_tp = (low_today  <= tp)
                 hit_sl = (high_today >= sl)
                 if hit_tp or hit_sl:
-                    ret_total = (STR['pt_pct'] if (hit_tp and not hit_sl) else
-                                 (-STR['sl_pct'] if (hit_sl and not hit_tp) else -STR['sl_pct']))
-                    todays_pos_returns.append(ret_total)
+                    entry_close = pos.entry_price
+                    exit_price = tp if (hit_tp and not hit_sl) else (sl if (hit_sl and not hit_tp) else sl)
+                    total_ret = (entry_close - exit_price) / entry_close
+                    cs = close_series.get(sid)
+                    if cs is not None:
+                        prev_dates = cs.index[cs.index < D]
+                        if len(prev_dates) and prev_dates.min() <= pos.entry_date:
+                            prev_day = prev_dates.max()
+                            ret_until_prev = (entry_close - cs.loc[prev_day]) / entry_close
+                        else:
+                            ret_until_prev = 0.0
+                    else:
+                        ret_until_prev = 0.0
+                    today_contrib = total_ret - ret_until_prev
+                    todays_pos_returns.append(today_contrib)
                     positions.pop(sid, None)
                 else:
                     todays_pos_returns.append(-daily_mtm)
@@ -564,10 +585,10 @@ def random_search_tuning(X_train_seq, y_train):
         else:
             normalized[k] = v
 
-    # Fill defaults for any missing keys
-    normalized.setdefault('rnn_layers', FIX['rnn_layers'])
-    normalized.setdefault('units', FIX['units'])
-    normalized.setdefault('learning_rate', FIX['learning_rate'])
+    # Safe defaults for any missing keys
+    normalized.setdefault('rnn_layers', 2)
+    normalized.setdefault('units', 64)
+    normalized.setdefault('learning_rate', 0.001)
     normalized.setdefault('l2_reg', FIX['l2_reg'])
     normalized.setdefault('dropout_rate', FIX['dropout_rate'])
 
@@ -692,10 +713,9 @@ def main():
 
     # Model with best params
     print("[STEP] Compiling FINAL RNN model with best hyperparameters...")
-    # temporarily override FIX-like values
-    final_units = int(best.get('units', FIX['units']))
-    final_layers = int(best.get('rnn_layers', FIX['rnn_layers']))
-    final_lr = float(best.get('learning_rate', FIX['learning_rate']))
+    final_units = int(best.get('units', 64))
+    final_layers = int(best.get('rnn_layers', 2))
+    final_lr = float(best.get('learning_rate', 0.001))
     final_l2 = float(best.get('l2_reg', FIX['l2_reg']))
     final_dropout = float(best.get('dropout_rate', FIX['dropout_rate']))
 
@@ -779,7 +799,7 @@ def main():
         'rnn_layers': final_layers,
         'units': final_units,
         'learning_rate': final_lr,
-        'dropout': FIX['dropout_rate'],
+        'dropout': final_dropout,
         'l2_reg': FIX['l2_reg'],
         'batch_size': FIX['batch_size'],
         'epochs': HYPERPARAMS['final_model_epochs'],
