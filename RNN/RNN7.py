@@ -8,7 +8,8 @@ Updates in this version:
 - Cross-validation uses TimeSeriesSplit (respects temporal order).
 - Strategy simulator records trade-level data (entry/exit, return, holding days, reason TP/SL).
 - Added trade-level metrics and included them in the PNG summary table and terminal output.
-- FIX: SciKeras param grid now uses 'model__' prefix (prevents "invalid parameter units" error).
+- SciKeras param grid uses 'model__' prefix (prevents "invalid parameter units" error).
+- CV training now shows epoch progress bars (fit__verbose=2 / verbose=2).
 """
 
 import os
@@ -31,7 +32,6 @@ from tensorflow.keras.optimizers import Adam
 # Sklearn
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 
 try:
@@ -58,7 +58,7 @@ HYPERPARAMS = {
     'cv_epochs': 2,                  # Počet epoch pro cross-validation (nižší kvůli rychlosti)
     'patience': 1,
     'cv_folds': 2,
-    'n_iter': 1, 
+    'n_iter': 1,
 
     # HYPERPARAMETER SEARCH SPACE
     'search_space': {
@@ -243,9 +243,9 @@ def build_feature_set(df: pd.DataFrame):
     }
     feature_cols = []
     for c in df.columns:
-        if c in exclude: 
+        if c in exclude:
             continue
-        if df[c].dtype.kind not in 'fi': 
+        if df[c].dtype.kind not in 'fi':
             continue
         if any(k in c for k in ['_lag','SMA_','EMA_','MACD','RSI_','BB_','ATR_','HV_','OBV','VIX_','Price_']):
             feature_cols.append(c)
@@ -280,30 +280,6 @@ def build_sequences(df: pd.DataFrame, feature_cols, timesteps: int):
 # =========================
 # MODEL
 # =========================
-def make_model(input_timesteps: int, input_dim: int, rnn_layers: int, units: int, learning_rate: float, l2_reg: float, dropout_rate: float) -> tf.keras.Model:
-    m = Sequential()
-    for li in range(rnn_layers):
-        return_seq = (li < rnn_layers - 1)
-        if li == 0:
-            m.add(SimpleRNN(
-                units=units, activation='tanh', return_sequences=return_seq,
-                input_shape=(input_timesteps, input_dim),
-                kernel_regularizer=l2(l2_reg)
-            ))
-        else:
-            m.add(SimpleRNN(
-                units=units, activation='tanh', return_sequences=return_seq,
-                kernel_regularizer=l2(l2_reg)
-            ))
-        m.add(Dropout(dropout_rate))
-    m.add(Dense(1, activation='linear'))
-    m.compile(optimizer=Adam(learning_rate), loss='mse', metrics=['mae'])
-    return m
-
-
-# =========================
-# MODEL BUILDER FOR SEARCH
-# =========================
 def build_rnn_model_for_search(rnn_layers=2, units=64, learning_rate=0.001, l2_reg=0.001, dropout_rate=0.2, input_timesteps=None, input_dim=None):
     # Use provided input shapes; fall back to FIX if not given
     tsteps = input_timesteps if input_timesteps is not None else FIX['timesteps']
@@ -325,6 +301,26 @@ def build_rnn_model_for_search(rnn_layers=2, units=64, learning_rate=0.001, l2_r
         m.add(Dropout(float(dropout_rate)))
     m.add(Dense(1, activation='linear'))
     m.compile(optimizer=Adam(float(learning_rate)), loss='mse', metrics=['mae'])
+    return m
+
+def make_model(input_timesteps: int, input_dim: int, rnn_layers: int, units: int, learning_rate: float, l2_reg: float, dropout_rate: float) -> tf.keras.Model:
+    m = Sequential()
+    for li in range(rnn_layers):
+        return_seq = (li < rnn_layers - 1)
+        if li == 0:
+            m.add(SimpleRNN(
+                units=units, activation='tanh', return_sequences=return_seq,
+                input_shape=(input_timesteps, input_dim),
+                kernel_regularizer=l2(l2_reg)
+            ))
+        else:
+            m.add(SimpleRNN(
+                units=units, activation='tanh', return_sequences=return_seq,
+                kernel_regularizer=l2(l2_reg)
+            ))
+        m.add(Dropout(dropout_rate))
+    m.add(Dense(1, activation='linear'))
+    m.compile(optimizer=Adam(learning_rate), loss='mse', metrics=['mae'])
     return m
 
 
@@ -591,9 +587,9 @@ def random_search_tuning(X_train_seq, y_train):
             model=build_rnn_model_for_search,
             model__input_timesteps=timesteps,
             model__input_dim=input_dim,
-            verbose=0,
             epochs=HYPERPARAMS['cv_epochs'],
-            batch_size=FIX['batch_size']
+            batch_size=FIX['batch_size'],
+            fit__verbose=2   # progress bary z Kerasu při ladění
         )
     else:
         reg = KerasRegressor(
@@ -603,7 +599,7 @@ def random_search_tuning(X_train_seq, y_train):
             ),
             epochs=HYPERPARAMS['cv_epochs'],
             batch_size=FIX['batch_size'],
-            verbose=0
+            verbose=2        # progress bary u fallback wrapperu
         )
 
     # Map search space keys (SciKeras needs 'model__' prefix)
@@ -771,6 +767,7 @@ def main():
     train_df, test_df = split_train_test(df, feature_cols)
 
     # Scale features using train only
+    from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler().fit(train_df[feature_cols].values)
     def transform_seq(X_seq):
         n_s, n_t, n_f = X_seq.shape
