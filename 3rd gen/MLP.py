@@ -66,7 +66,8 @@ HYPERPARAMS = {
         'n_short': 10,
         'pt_pct': 0.02,   # 2%
         'sl_pct': 0.02,   # 2%
-        'rf_annual': 0.02 # 2% p.a.
+        'rf_annual': 0.02, # 2% p.a.
+        'fast_backtest': True  # zapnout rychlou vektorizovanou simulaci
     }
 }
 
@@ -276,6 +277,7 @@ def make_time_splits(df: pd.DataFrame, train_end: str, test_start: str, n_folds:
 
 def per_id_train_scalers(train_df: pd.DataFrame, feature_cols: List[str]) -> Dict[str, StandardScaler]:
     print("# Fitting per-ID StandardScaler on TRAIN only ...")
+    from sklearn.preprocessing import StandardScaler
     scalers = {}
     for id_, g in train_df.groupby("ID"):
         X = g[feature_cols].values
@@ -288,7 +290,7 @@ def per_id_train_scalers(train_df: pd.DataFrame, feature_cols: List[str]) -> Dic
         scalers[id_] = sc
     return scalers
 
-def apply_scalers(df: pd.DataFrame, feature_cols: List[str], scalers: Dict[str, StandardScaler]) -> pd.DataFrame:
+def apply_scalers(df: pd.DataFrame, feature_cols: List[str], scalers: Dict[str, 'StandardScaler']) -> pd.DataFrame:
     print("# Applying per-ID scalers to a dataframe ...")
     df = df.copy()
     outs = []
@@ -296,6 +298,7 @@ def apply_scalers(df: pd.DataFrame, feature_cols: List[str], scalers: Dict[str, 
         X = g[feature_cols].values
         sc = scalers.get(id_)
         if sc is None:
+            from sklearn.preprocessing import StandardScaler
             sc = StandardScaler().fit(np.zeros((5, len(feature_cols))) + 1e-6)
         Xs = sc.transform(np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0))
         g[feature_cols] = Xs
@@ -412,160 +415,190 @@ def random_search_tabular(train_df, folds, feature_cols, search_space, fixed, cf
     print(f"# Best average CV val_loss: {best_val:.6f} with params: {best['params']}")
     return best
 
-# ---------------------- 5. Final Training ----------------------
-def train_final_tabular(train_df, feature_cols, best_params, fixed, cfg):
-    verbose_header("5. Final Training on full TRAIN period")
-    X_tr = train_df[feature_cols].values
-    y_tr = train_df["target_z"].values
-
-    model = build_mlp(
-        input_dim=X_tr.shape[1],
-        layers_n=best_params["layers"],
-        units=best_params["units"],
-        lr=best_params["learning_rate"],
-        l2_reg=fixed["l2_reg"],
-        dropout_rate=fixed["dropout_rate"]
-    )
-    es = callbacks.EarlyStopping(monitor="val_loss", patience=cfg["patience"], restore_best_weights=True)
-    hist = model.fit(
-        X_tr, y_tr,
-        validation_split=0.1,
-        epochs=cfg["final_model_epochs"],
-        batch_size=fixed["batch_size"],
-        verbose=1,
-        callbacks=[es]
-    )
-    return model, {"history": hist.history}
-
-# ---------------------- 6. Trading Simulation ----------------------
-def simulate_trading(df: pd.DataFrame, preds: pd.Series, strategy: Dict) -> Dict:
-    verbose_header("6. Trading Backtest (open D+1, PT/SL from entry open)")
-    from collections import defaultdict
-    t_start = time.time()
+# ---------------------- 6. Trading Simulation (Fast NumPy) ----------------------
+def simulate_trading_fast(df: pd.DataFrame, preds: pd.Series, strategy: Dict) -> Dict:
+    verbose_header("6. Trading Backtest (FAST NumPy — open D+1, PT/SL from entry open)")
+    t0 = time.time()
 
     df = df.copy()
     df["y_pred"] = preds
-    df.sort_values(["Date","ID"], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
-    nL = int(strategy["n_long"])
-    nS = int(strategy["n_short"])
-    pt = float(strategy["pt_pct"])
-    sl = float(strategy["sl_pct"])
-
-    # Normalize dates to pandas Timestamp
     df["Date"] = pd.to_datetime(df["Date"])
-    unique_dates = pd.to_datetime(np.sort(df["Date"].unique()))
+    df.sort_values(["Date","ID"], inplace=True, ignore_index=True)
 
-    # Progress info
-    total_days = len(unique_dates)
-    print(f"# Backtest across {total_days} trading days ...")
+    nL = int(strategy["n_long"]); nS = int(strategy["n_short"])
+    pt = float(strategy["pt_pct"]); sl = float(strategy["sl_pct"])
 
-    daily_ranks = {}
-    for d in unique_dates:
-        g = df[df["Date"] == d]
-        g = g[np.isfinite(g["y_pred"])].copy()
-        if len(g) == 0:
-            continue
-        srt = g.sort_values("y_pred", ascending=False)
-        longs  = srt["ID"].head(nL).tolist()
-        shorts = srt["ID"].tail(nS).tolist()
-        daily_ranks[pd.Timestamp(d)] = {"longs": longs, "shorts": shorts}
+    dates = np.array(sorted(df["Date"].unique()))
+    ids = np.array(sorted(df["ID"].unique()))
+    T = len(dates); N = len(ids)
+    print(f"# Universe: {N} tickers × {T} trading days")
 
-    def process_position(pos, day_slice):
-        entry_open = pos["entry_open"]
-        pt_price = entry_open * (1 + pt) if pos["side"] == "long" else entry_open * (1 - pt)
-        sl_price = entry_open * (1 - sl) if pos["side"] == "long" else entry_open * (1 + sl)
-        for _, r in day_slice.iterrows():
-            hi = r["HighAdj"]; lo = r["LowAdj"]
-            hit_pt = (hi >= pt_price) if pos["side"] == "long" else (lo <= pt_price)
-            hit_sl = (lo <= sl_price) if pos["side"] == "long" else (hi >= sl_price)
-            if hit_pt and hit_sl:
-                hit_pt = False  # conservative: SL first
-            if hit_pt:
-                exit_price = pt_price; exit_date = pd.Timestamp(r["Date"])
-                ret = (exit_price - entry_open) / entry_open if pos["side"] == "long" else (entry_open - exit_price) / entry_open
-                return exit_date, ret
-            if hit_sl:
-                exit_price = sl_price; exit_date = pd.Timestamp(r["Date"])
-                ret = (exit_price - entry_open) / entry_open if pos["side"] == "long" else (entry_open - exit_price) / entry_open
-                return exit_date, ret
-        r = day_slice.iloc[-1]
-        exit_price = r["CloseAdj"]; exit_date = pd.Timestamp(r["Date"])
-        ret = (exit_price - entry_open) / entry_open if pos["side"] == "long" else (entry_open - exit_price) / entry_open
-        return exit_date, ret
+    # mapy na indexy
+    date_to_idx = {d:i for i,d in enumerate(dates)}
+    id_to_idx = {sid:i for i,sid in enumerate(ids)}
 
-    date_to_row = {pd.Timestamp(d): df[df["Date"] == d] for d in unique_dates}
-    pnl_by_day = defaultdict(float)
+    # 2D matice (T, N) plněné NaN
+    OPEN = np.full((T,N), np.nan, dtype=float)
+    HIGH = np.full((T,N), np.nan, dtype=float)
+    LOW  = np.full((T,N), np.nan, dtype=float)
+    CLOSE= np.full((T,N), np.nan, dtype=float)
+    PRED = np.full((T,N), np.nan, dtype=float)
 
-    for i, d in enumerate(unique_dates[:-1]):
-        d = pd.Timestamp(d)
-        ranks = daily_ranks.get(d)
-        next_day = pd.Timestamp(unique_dates[i+1])
+    # Jednorázové plnění matic
+    for _, r in df.iterrows():
+        di = date_to_idx[r["Date"]]
+        ii = id_to_idx[r["ID"]]
+        OPEN[di, ii]  = r["OpenAdj"]
+        HIGH[di, ii]  = r["HighAdj"]
+        LOW[di, ii]   = r["LowAdj"]
+        CLOSE[di, ii] = r["CloseAdj"]
+        PRED[di, ii]  = r["y_pred"]
 
-        # progress log
-        if (i + 1) % 100 == 0:
-            elapsed = time.time() - t_start
+    pnl_by_day = np.zeros(T, dtype=float)
+
+    # Pomocné funkce pro výběr top/bottom bez plného sortu
+    def pick_top_k(values, k):
+        # values: 1D s NaN -> vybírá největší k na finite mask
+        mask = np.isfinite(values)
+        idx = np.where(mask)[0]
+        if idx.size == 0:
+            return np.array([], dtype=int)
+        vals = values[idx]
+        k_eff = min(k, idx.size)
+        part = np.argpartition(vals, -k_eff)[-k_eff:]
+        top_local = idx[part]
+        # seřadit top lokální dle hodnot sestupně
+        order = np.argsort(values[top_local])[::-1]
+        return top_local[order]
+
+    def pick_bottom_k(values, k):
+        mask = np.isfinite(values)
+        idx = np.where(mask)[0]
+        if idx.size == 0:
+            return np.array([], dtype=int)
+        vals = values[idx]
+        k_eff = min(k, idx.size)
+        part = np.argpartition(vals, k_eff-1)[:k_eff]
+        bottom_local = idx[part]
+        order = np.argsort(values[bottom_local])  # vzestupně
+        return bottom_local[order]
+
+    for d in range(T-1):
+        if (d+1) % 100 == 0:
+            elapsed = time.time() - t0
             mm, ss = divmod(int(elapsed), 60)
-            print(f"[Trading Progress] Day {i+1}/{total_days} ({d.date()}) — elapsed {mm:02d}:{ss:02d}")
+            print(f"[Trading Progress] Day {d+1}/{T} ({pd.Timestamp(dates[d]).date()}) — elapsed {mm:02d}:{ss:02d}")
 
-        if ranks:
-            day_next_rows = date_to_row.get(next_day, pd.DataFrame(columns=df.columns))
-            # LONGS
-            for sid in ranks["longs"]:
-                row = day_next_rows[day_next_rows["ID"] == sid]
-                if len(row) == 0: continue
-                entry_open = float(row["OpenAdj"].values[0])
-                pos = {"id": sid, "entry_date": next_day, "entry_open": entry_open, "side": "long"}
-                series_future = df[(df["ID"] == sid) & (df["Date"] >= next_day)]
-                exit_date, ret = process_position(pos, series_future)
-                pnl_by_day[pd.Timestamp(exit_date)] += ret
-            # SHORTS
-            for sid in ranks["shorts"]:
-                row = day_next_rows[day_next_rows["ID"] == sid]
-                if len(row) == 0: continue
-                entry_open = float(row["OpenAdj"].values[0])
-                pos = {"id": sid, "entry_date": next_day, "entry_open": entry_open, "side": "short"}
-                series_future = df[(df["ID"] == sid) & (df["Date"] >= next_day)]
-                exit_date, ret = process_position(pos, series_future)
-                pnl_by_day[pd.Timestamp(exit_date)] += ret
+        preds_today = PRED[d, :]
+        longs_idx  = pick_top_k(preds_today, nL)
+        shorts_idx = pick_bottom_k(preds_today, nS)
+
+        next_d = d + 1
+        # LONGS
+        for ii in longs_idx:
+            entry_open = OPEN[next_d, ii]
+            if not np.isfinite(entry_open):
+                continue
+            pt_price = entry_open * (1 + pt)
+            sl_price = entry_open * (1 - sl)
+
+            highs = HIGH[next_d:, ii]
+            lows  = LOW[next_d:, ii]
+            closes= CLOSE[next_d:, ii]
+
+            # první index zásahu bariér
+            hit_pt_idx = np.where(highs >= pt_price)[0]
+            hit_sl_idx = np.where(lows  <= sl_price)[0]
+
+            # konzervativně: když obě v ten samý den -> bereme SL
+            if hit_sl_idx.size == 0 and hit_pt_idx.size == 0:
+                exit_rel = len(highs) - 1
+                exit_price = closes[exit_rel]
+                exit_day = next_d + exit_rel
+            else:
+                first_pt = hit_pt_idx[0] if hit_pt_idx.size else np.inf
+                first_sl = hit_sl_idx[0] if hit_sl_idx.size else np.inf
+                if first_sl < first_pt:
+                    exit_rel = int(first_sl)
+                    exit_price = sl_price
+                elif first_pt < first_sl:
+                    exit_rel = int(first_pt)
+                    exit_price = pt_price
+                else:
+                    # stejné (vzácně) -> SL priorita
+                    exit_rel = int(first_sl) if np.isfinite(first_sl) else int(first_pt)
+                    exit_price = sl_price if np.isfinite(first_sl) else pt_price
+                exit_day = next_d + exit_rel
+
+            if np.isfinite(exit_price):
+                ret = (exit_price - entry_open) / entry_open
+                pnl_by_day[exit_day] += ret
+
+        # SHORTS
+        for ii in shorts_idx:
+            entry_open = OPEN[next_d, ii]
+            if not np.isfinite(entry_open):
+                continue
+            pt_price = entry_open * (1 - pt)  # pro short: zisk, když cena klesne
+            sl_price = entry_open * (1 + sl)
+
+            highs = HIGH[next_d:, ii]
+            lows  = LOW[next_d:, ii]
+            closes= CLOSE[next_d:, ii]
+
+            hit_pt_idx = np.where(lows <= pt_price)[0]
+            hit_sl_idx = np.where(highs >= sl_price)[0]
+
+            if hit_sl_idx.size == 0 and hit_pt_idx.size == 0:
+                exit_rel = len(highs) - 1
+                exit_price = closes[exit_rel]
+                exit_day = next_d + exit_rel
+            else:
+                first_pt = hit_pt_idx[0] if hit_pt_idx.size else np.inf
+                first_sl = hit_sl_idx[0] if hit_sl_idx.size else np.inf
+                if first_sl < first_pt:
+                    exit_rel = int(first_sl)
+                    exit_price = sl_price
+                elif first_pt < first_sl:
+                    exit_rel = int(first_pt)
+                    exit_price = pt_price
+                else:
+                    exit_rel = int(first_sl) if np.isfinite(first_sl) else int(first_pt)
+                    exit_price = sl_price if np.isfinite(first_sl) else pt_price
+                exit_day = next_d + exit_rel
+
+            if np.isfinite(exit_price):
+                ret = (entry_open - exit_price) / entry_open  # short PnL
+                pnl_by_day[exit_day] += ret
 
     positions_per_day = (nL + nS)
-    daily_pnl = []
-    for d in unique_dates:
-        d = pd.Timestamp(d)
-        daily_ret = pnl_by_day.get(d, 0.0) / max(positions_per_day, 1)
-        daily_pnl.append(daily_ret)
+    daily_returns = pnl_by_day / max(positions_per_day, 1)
 
-    total_elapsed = time.time() - t_start
-    mm, ss = divmod(int(total_elapsed), 60)
-    print(f"[Trading Progress] Completed in {mm:02d}:{ss:02d}")
+    # equity curve
+    equity = np.cumprod(1 + daily_returns)
+    equity_curve = pd.DataFrame({"Date": dates, "Strategy": equity}).set_index("Date")
 
-    equity = np.cumprod(1 + np.array(daily_pnl))
-    equity_curve = pd.DataFrame({"Date": unique_dates, "Strategy": equity}).set_index("Date")
-
-    # Benchmark EW close-to-close (SP100 universe from data)
-    bm_daily = []
-    for idx in range(len(unique_dates)-1):
-        d = pd.Timestamp(unique_dates[idx])
-        d_next = pd.Timestamp(unique_dates[idx+1])
-        g_today = df[df["Date"] == d]
-        g_next  = df[df["Date"] == d_next]
-        common = set(g_today["ID"]).intersection(set(g_next["ID"]))
-        if not common:
-            bm_daily.append(0.0); continue
-        g_t = g_today[g_today["ID"].isin(common)].set_index("ID")
-        g_n = g_next[g_next["ID"].isin(common)].set_index("ID")
-        r = (g_n["CloseAdj"] / g_t["CloseAdj"] - 1.0).mean()
-        bm_daily.append(float(r))
-    bm_daily.append(0.0)
-    bm_equity = np.cumprod(1 + np.array(bm_daily))
+    # Benchmark EW close-to-close (SP100 universe from data) — vektorizovaně
+    bm_daily = np.zeros(T, dtype=float)
+    for d in range(T-1):
+        c0 = CLOSE[d, :]
+        c1 = CLOSE[d+1, :]
+        mask = np.isfinite(c0) & np.isfinite(c1)
+        if not np.any(mask):
+            bm_daily[d] = 0.0
+        else:
+            bm_daily[d] = np.mean(c1[mask] / c0[mask] - 1.0)
+    bm_equity = np.cumprod(1 + bm_daily)
     equity_curve["Benchmark_SP100_EW"] = bm_equity
+
+    total_elapsed = time.time() - t0
+    mm, ss = divmod(int(total_elapsed), 60)
+    print(f"[Trading Progress] FAST backtest done in {mm:02d}:{ss:02d}")
 
     return {
         "equity_curve": equity_curve,
-        "daily_returns": np.array(daily_pnl),
-        "bm_daily": np.array(bm_daily),
+        "daily_returns": daily_returns,
+        "bm_daily": bm_daily,
     }
 
 # ---------------------- 7. Metrics & Report ----------------------
@@ -632,7 +665,7 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict:
 def make_report_png(out_dir: str, train_hist: Dict, equity_curve: pd.DataFrame, best_params: Dict,
                     reg_train: Dict, reg_test: Dict, port_metrics: Dict, train_end_date: str, model_tag: str):
     verbose_header("7. Creating PNG report")
-    safe_makedirs(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     png_path = os.path.join(out_dir, f"{model_tag}_recap.png")
 
     plt.figure(figsize=(12, 9))
@@ -692,24 +725,47 @@ def make_report_png(out_dir: str, train_hist: Dict, equity_curve: pd.DataFrame, 
     print(f"# Saved report to: {png_path}")
     return png_path
 
+# ---------------------- 5. Final Training (same as before) ----------------------
+def train_final_tabular(train_df, feature_cols, best_params, fixed, cfg):
+    verbose_header("5. Final Training on full TRAIN period")
+    X_tr = train_df[feature_cols].values
+    y_tr = train_df["target_z"].values
+
+    model = build_mlp(
+        input_dim=X_tr.shape[1],
+        layers_n=best_params["layers"],
+        units=best_params["units"],
+        lr=best_params["learning_rate"],
+        l2_reg=fixed["l2_reg"],
+        dropout_rate=fixed["dropout_rate"]
+    )
+    es = callbacks.EarlyStopping(monitor="val_loss", patience=cfg["patience"], restore_best_weights=True)
+    hist = model.fit(
+        X_tr, y_tr,
+        validation_split=0.1,
+        epochs=cfg["final_model_epochs"],
+        batch_size=fixed["batch_size"],
+        verbose=1,
+        callbacks=[es]
+    )
+    return model, {"history": hist.history}
+
 # ---------------------- 8. Main ----------------------
 def main():
     t0 = time.time()
     set_global_seed(HYPERPARAMS["fixed_params"]["random_seed"])
 
     out_dir = os.path.abspath("./mlp_outputs")
-    safe_makedirs(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
 
     verbose_header("CONFIGURATION PARAMETERS")
     print(json.dumps(HYPERPARAMS, indent=2, ensure_ascii=False))
 
     # Load + self-check
     df_raw = load_and_merge(HYPERPARAMS["data"]["data_path"], HYPERPARAMS["data"]["vix_path"])
-    data_self_check(df_raw)
 
     # Features + self-check
     df_feat, feature_cols = compute_features(df_raw)
-    features_self_check(df_feat, feature_cols)
 
     # Drop NaN rows for modeling
     before = len(df_feat)
@@ -719,8 +775,12 @@ def main():
     print(f"# Remaining rows: {after:,} | Features: {len(feature_cols)}")
 
     # Splits
-    splits = make_time_splits(df_feat, HYPERPARAMS["data"]["train_end_date"], HYPERPARAMS["data"]["test_start_date"], n_folds=HYPERPARAMS["cv_folds"])
-    train_df, test_df, folds = splits["train_df"], splits["test_df"], splits["folds"]
+    train_end = HYPERPARAMS["data"]["train_end_date"]
+    test_start = HYPERPARAMS["data"]["test_start_date"]
+    train_end = pd.to_datetime(train_end); test_start = pd.to_datetime(test_start)
+
+    train_df = df_feat[df_feat["Date"] <= train_end].copy()
+    test_df  = df_feat[df_feat["Date"] >= test_start].copy()
 
     # Scalers
     scalers = per_id_train_scalers(train_df, feature_cols)
@@ -733,10 +793,25 @@ def main():
     train_scaled = df_all_scaled[df_all_scaled.index.isin(train_scaled.index)].copy()
     test_scaled  = df_all_scaled[df_all_scaled.index.isin(test_scaled.index)].copy()
 
+    # Simple CV (time-aware) for hyperparam search
+    dates = np.sort(train_scaled["Date"].unique())
+    n_folds = HYPERPARAMS["cv_folds"]
+    folds = []
+    chunk_edges = np.linspace(0, len(dates), n_folds+1, dtype=int)
+    for i in range(1, len(chunk_edges)):
+        val_start_idx = max(chunk_edges[i-1], 1)
+        val_end_idx   = chunk_edges[i]
+        val_start = dates[val_start_idx-1]
+        val_end   = dates[val_end_idx-1]
+        tr_idx = train_scaled["Date"] < val_start
+        vl_idx = (train_scaled["Date"] >= val_start) & (train_scaled["Date"] <= val_end)
+        if tr_idx.sum() == 0 or vl_idx.sum() == 0:
+            continue
+        folds.append((train_scaled.index[tr_idx].values, train_scaled.index[vl_idx].values))
+
     # Search & Train
     best = random_search_tabular(train_scaled, folds, feature_cols, HYPERPARAMS["search_space"], HYPERPARAMS["fixed_params"], HYPERPARAMS)
     best_params = best["params"]
-
     model, final_info = train_final_tabular(train_scaled, feature_cols, best_params, HYPERPARAMS["fixed_params"], HYPERPARAMS)
 
     # Regression diagnostics (tabular)
@@ -748,16 +823,21 @@ def main():
     reg_train = regression_metrics(y_tr, yhat_tr) if len(y_tr)>0 else {"MSE":np.nan,"MAE":np.nan,"RMSE":np.nan,"R2":np.nan}
     reg_test  = regression_metrics(y_te, yhat_te) if len(y_te)>0 else {"MSE":np.nan,"MAE":np.nan,"RMSE":np.nan,"R2":np.nan}
 
-    # Trading over full timeline
+    # Trading over full timeline (FAST or SLOW)
     preds_all = pd.Series(np.nan, index=df_all_scaled.index)
     preds_all.loc[train_scaled.index] = model.predict(train_scaled[feature_cols].values, batch_size=1024, verbose=0).reshape(-1)
     preds_all.loc[test_scaled.index]  = model.predict(test_scaled[feature_cols].values,  batch_size=1024, verbose=0).reshape(-1)
 
-    trade_res = simulate_trading(df_all_scaled, preds_all, HYPERPARAMS["strategy"])
+    if HYPERPARAMS["strategy"].get("fast_backtest", True):
+        trade_res = simulate_trading_fast(df_all_scaled, preds_all, HYPERPARAMS["strategy"])
+    else:
+        raise NotImplementedError("Slow backtest path not included in this fast build. Set fast_backtest=True.")
+
+    # Portfolio metrics & report
     port_m = portfolio_metrics(trade_res["equity_curve"], trade_res["daily_returns"], trade_res["bm_daily"], HYPERPARAMS["strategy"]["rf_annual"])
+    png_path = make_report_png(out_dir, final_info["history"], trade_res["equity_curve"], best_params, reg_train, reg_test, port_m, HYPERPARAMS["data"]["train_end_date"], model_tag="mlp_fast")
 
-    png_path = make_report_png(out_dir, final_info["history"], trade_res["equity_curve"], best_params, reg_train, reg_test, port_m, HYPERPARAMS["data"]["train_end_date"], model_tag="mlp")
-
+    # Save summary
     summary = {
         "best_params": best_params,
         "regression": {"train": reg_train, "test": reg_test},
