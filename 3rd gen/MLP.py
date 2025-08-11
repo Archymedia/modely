@@ -106,6 +106,9 @@ def load_and_merge(data_path, vix_path) -> pd.DataFrame:
     print("# Loading main data:", data_path)
     df = pd.read_csv(data_path)
     df = parse_dates(df, "Date")
+    # Coerce ID to string to avoid mixed int/str across OS
+    if 'ID' in df.columns:
+        df['ID'] = df['ID'].astype(str)
 
     vix_path = resolve_first_existing(vix_path)
     print("# Loading VIX data:", vix_path)
@@ -121,6 +124,8 @@ def load_and_merge(data_path, vix_path) -> pd.DataFrame:
     print("# Merging VIX on Date ...")
     df = df.merge(vix, on="Date", how="left")
     df.sort_values(["Date", "ID"], inplace=True)
+    # Ensure ID stays string
+    df['ID'] = df['ID'].astype(str)
     df.reset_index(drop=True, inplace=True)
     return df
 
