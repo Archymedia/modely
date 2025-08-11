@@ -1,0 +1,11 @@
+FATAL ERROR:
+Traceback (most recent call last):
+  File "c:\Users\david\Desktop\lindaPy\mlp.py", line 849, in <module>
+    main()
+  File "c:\Users\david\Desktop\lindaPy\mlp.py", line 817, in main
+    trade_res = simulate_trading(df_all_scaled, preds_all, HYPERPARAMS["strategy"])
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\david\Desktop\lindaPy\mlp.py", line 498, in simulate_trading
+    if len(g) == 0:
+           ^
+UnboundLocalError: cannot access local variable 'g' where it is not associated with a value
