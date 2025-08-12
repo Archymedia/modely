@@ -1,6 +1,6 @@
 
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*- c:/Users/david/Desktop/lindaPy/mlp.py
+# -*- coding: utf-8 -*-
 """
 MLP_final_v15.py
 ----------------
@@ -65,7 +65,7 @@ HYPERPARAMS = {
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
         'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_v16.png",
-        'output_fallback_png': r"C:\Users\david\Desktop\SP100\MLP_dashboard_v16.png",
+        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\mlp.png",
     },
     'final_model_epochs': 5,
     'cv_epochs': 3,
