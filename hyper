@@ -1,0 +1,16 @@
+   'final_model_epochs': 100,
+    'cv_epochs': 20,
+    'patience': 10,
+    'cv_folds': 3,
+    'n_iter': 20,
+    'search_space': {
+        'layers': [1, 2],
+        'units': [64, 128, 256],
+        'learning_rate': [1e-4, 1e-3, 1e-2]
+    },
+    'fixed_params': {
+        'batch_size': 128, # zkusit 256, ale to může být moc
+        'dropout_rate': 0.15,
+        'l2_reg': 3e-4,
+        'random_seed': 42,
+        'val_fraction_for_final': 0.15,
