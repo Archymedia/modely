@@ -19,6 +19,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from scipy.stats import spearmanr
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
 # ---- Table styling helper for PNG ----
@@ -64,14 +66,14 @@ HYPERPARAMS = {
                       "/mnt/data/VIX_2005_2023.csv"],
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
-        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_v16.png",
-        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\mlp.png",
+        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_finalv1.png",
+        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_finalv1.png",
     },
-    'final_model_epochs': 100,
-    'cv_epochs': 20,
-    'patience': 10,
-    'cv_folds': 3,
-    'n_iter': 20,
+    'final_model_epochs': 2,
+    'cv_epochs': 2,
+    'patience': 1,
+    'cv_folds': 2,
+    'n_iter': 1,
     'search_space': {
         'layers': [1, 2, 3],
         'units': [32, 64, 128],
@@ -370,9 +372,10 @@ def alpha_beta_ols(r_s:pd.Series, r_b:pd.Series)->Dict[str,float]:
             'beta':float(m.params[1]), 'beta_t':float(m.tvalues[1]), 'beta_p':float(m.pvalues[1]), 'r2':float(m.rsquared)}
 
 def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
-             final_hist, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories):
+             final_hist, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories,
+             ic_metrics, preds_test):
     log(f"Ukládám dashboard PNG: {path}")
-    plt.figure(figsize=(18,12), dpi=150)
+    fig = plt.figure(figsize=(18,12), dpi=150, constrained_layout=True)
     # Horní řádek: kumulativní výnosy all/test
     ax1 = plt.subplot2grid((6,4),(0,0), colspan=4, rowspan=2)
     _, curve_all=max_drawdown_curve(r_all); _, curve_b_all=max_drawdown_curve(ew_all)
@@ -391,6 +394,16 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     ax2.set_title("Kumulativní výnos — reset v 2021‑01‑01 (test část)")
     ax2.set_ylabel("Equity (index, start=1.0)")
     ax2.legend(loc='best')
+
+    # Inset: histogram of test predictions
+    try:
+        ax2_ins = inset_axes(ax2, width="25%", height="55%", loc="upper left", borderpad=1)
+        ax2_ins.hist(preds_test, bins=30, density=True)
+        ax2_ins.set_title("Predictions (test)", fontsize=8)
+        ax2_ins.tick_params(labelsize=7)
+        ax2_ins.set_in_layout(False)
+    except Exception:
+        pass
 
     # Levý spodní sloupec: dva grafy MSE (CV per-fold + Final)
     ax3 = plt.subplot2grid((6,4),(3,0), colspan=2, rowspan=1)
@@ -430,43 +443,56 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                 cell.set_facecolor('#f0f0f0')
         ax.set_title(title, pad=pad)
 
+    def _stars(p):
+        return '***' if (p is not None and p <= 0.01) else ('**' if (p is not None and p <= 0.05) else ('*' if (p is not None and p <= 0.10) else ''))
+
     ax5 = plt.subplot2grid((6,4),(3,2), colspan=2, rowspan=1)
     reg_tbl = [["", "Train", "Test"],
-               ["mse",  f"{reg_train['mse']:.4f}",  f"{reg_test['mse']:.4f}"],
-               ["mae",  f"{reg_train['mae']:.4f}",  f"{reg_test['mae']:.4f}"],
-               ["rmse", f"{reg_train['rmse']:.4f}", f"{reg_test['rmse']:.4f}"],
-               ["r2",   f"{reg_train['r2']:.4f}",   f"{reg_test['r2']:.4f}"],]
+               ["MSE",  f"{reg_train['mse']:.4f}",  f"{reg_test['mse']:.4f}"],
+               ["MAE",  f"{reg_train['mae']:.4f}",  f"{reg_test['mae']:.4f}"],
+               ["RMSE", f"{reg_train['rmse']:.4f}", f"{reg_test['rmse']:.4f}"],
+               ["R2",   f"{reg_train['r2']:.4f}",   f"{reg_test['r2']:.4f}"],]
     table(ax5, reg_tbl, "Regresní metriky (Train/Test)")
 
     ax6 = plt.subplot2grid((6,4),(4,2), colspan=2, rowspan=1)
     ret_tbl = [["", "Train", "Test"],
-               ["cum",     f"{ret_train['cum']:.4f}",     f"{ret_test['cum']:.4f}"],
-               ["ann",     f"{ret_train['ann']:.4f}",     f"{ret_test['ann']:.4f}"],
-               ["sharpe",  f"{ret_train['sharpe']:.4f}",  f"{ret_test['sharpe']:.4f}"],
-               ["maxdd",   f"{ret_train['maxdd']:.4f}",   f"{ret_test['maxdd']:.4f}"],
-               ["vola_ann",f"{ret_train['vola_ann']:.4f}",f"{ret_test['vola_ann']:.4f}"],]
+               ["Cum. Return",     f"{ret_train['cum']:.4f}",     f"{ret_test['cum']:.4f}"],
+               ["Ann. Return",     f"{ret_train['ann']:.4f}",     f"{ret_test['ann']:.4f}"],
+               ["Sharpe",           f"{ret_train['sharpe']:.4f}",  f"{ret_test['sharpe']:.4f}"],
+               ["Max Drawdown",     f"{ret_train['maxdd']:.4f}",   f"{ret_test['maxdd']:.4f}"],
+               ["Ann. Volatility",  f"{ret_train['vola_ann']:.4f}",f"{ret_test['vola_ann']:.4f}"],]
     table(ax6, ret_tbl, "Výnosové metriky (Train/Test)")
 
     ax7 = plt.subplot2grid((6,4),(5,2), colspan=1, rowspan=1)
-    trades_tbl = [["win_rate",   f"{trade_m['win_rate']:.4f}"],
-                  ["profit_factor", f"{trade_m['profit_factor']:.4f}"],
-                  ["avg_holding_days", f"{trade_m['avg_holding_days']:.2f}"],
-                  ["pt_hit_pct", f"{trade_m['pt_hit_pct']:.4f}"],
-                  ["sl_hit_pct", f"{trade_m['sl_hit_pct']:.4f}"],]
+    trades_tbl = [["Win Rate",           f"{trade_m['win_rate']:.4f}"],
+                  ["Profit Factor",      f"{trade_m['profit_factor']:.4f}"],
+                  ["Avg. Holding (days)",f"{trade_m['avg_holding_days']:.2f}"],
+                  ["PT Hit %",           f"{trade_m['pt_hit_pct']:.4f}"],
+                  ["SL Hit %",           f"{trade_m['sl_hit_pct']:.4f}"],
+                  ["Hit vs. Benchmark",  f"{trade_m.get('hit_vs_bench', 0.0):.4f}"],
+                  ["IC (Spearman)",      f"{ic_metrics.get('ic_mean', 0.0):.4f}"],
+                  ["IC IR (ann)",        f"{ic_metrics.get('ic_ir_ann', 0.0):.4f}"],]
     table(ax7, trades_tbl, "Metriky obchodů")
 
     ax8 = plt.subplot2grid((6,4),(5,3), colspan=1, rowspan=1)
-    ab_tbl = [["alpha_daily",  f"{ab['alpha_daily']:.6f}"],
-              ["alpha_annual", f"{ab['alpha_annual']:.4f}"],
-              ["alpha_t",      f"{ab['alpha_t']:.4f}"],
-              ["alpha_p",      f"{ab['alpha_p']:.4f}"],
-              ["beta",         f"{ab['beta']:.4f}"],
-              ["beta_t",       f"{ab['beta_t']:.4f}"],
-              ["beta_p",       f"{ab['beta_p']:.4f}"],
-              ["r2",           f"{ab['r2']:.4f}"],]
+    ab_tbl = [["alpha_daily",   f"{ab['alpha_daily']:.6f}"],
+              ["alpha_annual",  f"{ab['alpha_annual']:.4f}{_stars(ab.get('alpha_p'))}"],
+              ["alpha_t",       f"{ab['alpha_t']:.4f}"],
+              ["alpha_p",       f"{ab['alpha_p']:.4f}"],
+              ["beta",          f"{ab['beta']:.4f}{_stars(ab.get('beta_p'))}"],
+              ["beta_t",        f"{ab['beta_t']:.4f}"],
+              ["beta_p",        f"{ab['beta_p']:.4f}"],
+              ["r2",            f"{ab['r2']:.4f}"],]
     table(ax8, ab_tbl, "Realizovaná alfa/beta (Test)", pad=20)
+    try:
+        ax8.text(0.5, -0.18,
+                 "* p≤0.10, ** p≤0.05, *** p≤0.01 (two-sided). Stars denote statistical significance of alpha/beta in OLS of daily strategy returns on EW benchmark (test).",
+                 transform=ax8.transAxes, ha='center', va='top', fontsize=8)
+    except Exception:
+        pass
 
-    plt.tight_layout(); plt.savefig(path, bbox_inches='tight'); plt.close()
+    fig.savefig(path)
+    plt.close(fig)
     try:
         nbytes=os.path.getsize(path); log(f"PNG uložen: {path} ({nbytes} B)")
     except Exception as e:
@@ -533,9 +559,34 @@ def main():
                  'pt_hit_pct': float((trades_df['Hit']=='PT').mean()) if len(trades_df)>0 else 0.0,
                  'sl_hit_pct': float((trades_df['Hit']=='SL').mean()) if len(trades_df)>0 else 0.0}
         ab=alpha_beta_ols(r_test_only, ew_test)
+
+        # IC (Spearman) – cross-sectional by day on TEST
+        test_df = df_scaled.loc[df_scaled['Date']>=test_start, ['Date','ID','pred','future_return']].dropna()
+        ic_by_day = []
+        for d, g in test_df.groupby('Date'):
+            if g['pred'].nunique() > 1 and g['future_return'].nunique() > 1 and len(g) > 2:
+                rho, p = spearmanr(g['pred'], g['future_return'])
+                if not np.isnan(rho):
+                    ic_by_day.append(rho)
+        ic_by_day = np.array(ic_by_day, dtype=float)
+        ic_mean = float(np.nanmean(ic_by_day)) if ic_by_day.size else 0.0
+        ic_std  = float(np.nanstd(ic_by_day, ddof=1)) if ic_by_day.size>1 else 0.0
+        ic_n    = int(ic_by_day.size)
+        ic_ir_ann = float((ic_mean / ic_std) * np.sqrt(252)) if ic_std>0 else 0.0
+        ic_metrics = {'ic_mean': ic_mean, 'ic_std': ic_std, 'ic_n': ic_n, 'ic_ir_ann': ic_ir_ann}
+
+        # Hit-rate vs. benchmark (TEST): share of days r_strategy > r_benchmark
+        comp = pd.concat([r_test_only.rename('s'), ew_test.rename('b')], axis=1).dropna()
+        hit_vs_bench = float((comp['s'] > comp['b']).mean()) if len(comp)>0 else 0.0
+        trade_m['hit_vs_bench'] = hit_vs_bench
+
+        # Keep predictions on TEST for histogram
+        preds_test = preds_test  # already computed above
+
     with Timer("Render PNG"):
         make_png(out_png, train_end, r_all, r_test_only, r_train_only, ew_all, ew_test,
-                 final_history, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories)
+                 final_history, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories,
+                 ic_metrics, preds_test)
     dt=time.perf_counter()-t0; log(f"Celkový čas běhu: {int(dt//60)} min {int(dt%60)} s")
 
 if __name__=="__main__":
