@@ -61,18 +61,18 @@ HYPERPARAMS = {
         'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_v1.png",
         'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_v2.png",
     },
-    'final_model_epochs': 100,
+    'final_model_epochs': 150,
     'cv_epochs': 50,
     'patience': 10,
     'cv_folds': 3,
-    'n_iter': 18,
+    'n_iter': 12,
     'search_space': {
         'layers': [1, 2],
-        'units': [128, 256, 512],
+        'units': [128, 256],
         'learning_rate': [1e-4, 3e-4, 1e-3]
     },
     'fixed_params': {
-        'batch_size': 128,
+        'batch_size': 256,
         'dropout_rate': 0.1,
         'l2_reg': 1e-4,
         'random_seed': 42,
