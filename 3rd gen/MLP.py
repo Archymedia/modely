@@ -67,15 +67,15 @@ HYPERPARAMS = {
         'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_v16.png",
         'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\mlp.png",
     },
-    'final_model_epochs': 5,
-    'cv_epochs': 3,
-    'patience': 2,
+    'final_model_epochs': 100,
+    'cv_epochs': 20,
+    'patience': 10,
     'cv_folds': 3,
-    'n_iter': 1,  # search je deterministický (náš malý prostor)
+    'n_iter': 20,
     'search_space': {
-        'layers': [1],
-        'units': [64],
-        'learning_rate': [1e-3]
+        'layers': [1, 2, 3],
+        'units': [32, 64, 128],
+        'learning_rate': [1e-4, 1e-3, 1e-2]
     },
     'fixed_params': {
         'batch_size': 128,
