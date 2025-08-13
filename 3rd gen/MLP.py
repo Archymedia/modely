@@ -1,14 +1,6 @@
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-MLP_final_v15.py
-----------------
-- CV loss x epochs: vykreslí jednotlivé foldy (ne průměr). Každý fold má vlastní barvu; train = plná, val = světlejší.
-- Finální model loss x epochs v samostatném grafu.
-- PNG název ladí s verzí (MLP_dashboard_v16.png).
-- Ostatní: stejné jako v13/14 (bez CSV/JSON; tabulky Train/Test; heartbeat v backtestu).
-"""
 
 import os, time, math, random, warnings
 from typing import List, Dict, Optional
@@ -66,8 +58,8 @@ HYPERPARAMS = {
                       "/mnt/data/VIX_2005_2023.csv"],
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
-        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_finalv4.png",
-        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_finalv4.png",
+        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_v1.png",
+        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_v1.png",
     },
     'final_model_epochs': 2,
     'cv_epochs': 2,
@@ -372,6 +364,7 @@ def alpha_beta_ols(r_s:pd.Series, r_b:pd.Series)->Dict[str,float]:
             'beta':float(m.params[1]), 'beta_t':float(m.tvalues[1]), 'beta_p':float(m.pvalues[1]), 'r2':float(m.rsquared)}
 
 def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
+             r_hedged_all, r_hedged_test, beta_hat,
              final_hist, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories,
              ic_metrics, preds_test):
     log(f"Ukládám dashboard PNG: {path}")
@@ -383,6 +376,9 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     _, curve_all=max_drawdown_curve(r_all); _, curve_b_all=max_drawdown_curve(ew_all)
     ax1.plot(curve_all.index, curve_all.values, label='Strategie (all)')
     ax1.plot(curve_b_all.index, curve_b_all.values, label='Benchmark EW (all)')
+    if r_hedged_all is not None and len(r_hedged_all)>0:
+        _, curve_h_all = max_drawdown_curve(r_hedged_all)
+        ax1.plot(curve_h_all.index, curve_h_all.values, label='Strategie beta‑hedged (all)', linestyle='--')
     ax1.axvline(pd.Timestamp(train_end)+pd.Timedelta(days=1), color='gray', linestyle='--', label='2021-01-01')
     ax1.set_title("Kumulativní výnos — celé období (train + test)")
     ax1.set_ylabel("Equity (index, start=1.0)")
@@ -392,24 +388,34 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     curve_t=(1+r_test.fillna(0)).cumprod(); curve_tb=(1+ew_test.fillna(0)).cumprod()
     ax2.plot(curve_t.index, curve_t.values, label='Strategie (test)')
     ax2.plot(curve_tb.index, curve_tb.values, label='Benchmark EW (test)')
+    if r_hedged_test is not None and len(r_hedged_test)>0:
+        curve_h_t = (1 + r_hedged_test.fillna(0)).cumprod()
+        ax2.plot(curve_h_t.index, curve_h_t.values, label='Strategie beta‑hedged (test)', linestyle='--')
+    try:
+        ax2.text(0.995, 0.02, f"β={beta_hat:.3f}", transform=ax2.transAxes, ha='right', va='bottom', fontsize=9,
+                 bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='gray', alpha=0.7))
+    except Exception:
+        pass
     ax2.axvline(pd.Timestamp(train_end)+pd.Timedelta(days=1), color='gray', linestyle='--', label='2021‑01‑01')
     ax2.set_title("Kumulativní výnos — reset v 2021‑01‑01 (test část)")
     ax2.set_ylabel("Equity (index, start=1.0)")
     ax2.legend(loc='best')
 
     ax3 = plt.subplot2grid((8,4),(4,0), colspan=2, rowspan=1)  # CV MSE per-fold
-    # Robust CV per-fold plotting (fallback to mse/val_mse keys if loss absent)
+    # Všechny train křivky zeleně, všechny val křivky oranžové
     if cv_histories:
-        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        train_color = '#2ca02c'   # zelená
+        val_color   = '#DAA520'   # oranžová
         for i, hist in enumerate(cv_histories):
-            c = colors[i % len(colors)]
             tr = hist.get('loss') or hist.get('mse') or []
             va = hist.get('val_loss') or hist.get('val_mse') or []
             if len(tr)==0 and len(va)==0:
                 continue
-            ax3.plot(tr if len(tr)>0 else [np.nan], color=c, alpha=0.9, linewidth=1.5)
-            ax3.plot(va if len(va)>0 else [np.nan], color=c, alpha=0.4, linewidth=1.5)
-        ax3.set_title("CV MSE (per fold) — train (tmavě), val (světle)")
+            x_tr = range(1, len(tr)+1) if len(tr)>0 else [1]
+            x_va = range(1, len(va)+1) if len(va)>0 else [1]
+            ax3.plot(x_tr, tr if len(tr)>0 else [np.nan], color=train_color, alpha=0.95, linewidth=1.5)
+            ax3.plot(x_va, va if len(va)>0 else [np.nan], color=val_color,   alpha=0.85, linewidth=1.5, linestyle='--')
+        ax3.set_title("CV MSE (per fold) — train (zeleně), val (oranžová)")
     ax3.set_xlabel("Epocha"); ax3.set_ylabel("MSE")
 
     ax4 = plt.subplot2grid((8,4),(5,0), colspan=2, rowspan=2)  # Final model MSE (taller)
@@ -458,7 +464,8 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                ["Ann. Volatility",  f"{ret_train['vola_ann']:.4f}",f"{ret_test['vola_ann']:.4f}"],]
     table(ax6, ret_tbl, "Výnosové metriky (Train/Test)")
 
-    ax7 = plt.subplot2grid((8,4),(6,2), colspan=2, rowspan=1)  # Trading table widened
+    # Spodní dvě tabulky vedle sebe (každá 1 sloupec), společná poznámka pod nimi
+    ax7 = plt.subplot2grid((8,4),(6,2), colspan=1, rowspan=1)  # Metriky obchodů vlevo
     trades_tbl = [["Win Rate",           f"{trade_m['win_rate']:.4f}"],
                   ["Profit Factor",      f"{trade_m['profit_factor']:.4f}"],
                   ["Avg. Holding (days)",f"{trade_m['avg_holding_days']:.2f}"],
@@ -467,9 +474,9 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                   ["Hit vs. Benchmark",  f"{trade_m.get('hit_vs_bench', 0.0):.4f}"],
                   ["IC (Spearman)",      f"{ic_metrics.get('ic_mean', 0.0):.4f}"],
                   ["IC IR (ann)",        f"{ic_metrics.get('ic_ir_ann', 0.0):.4f}"],]
-    table(ax7, trades_tbl, "Metriky obchodů")
+    table(ax7, trades_tbl, "Metriky obchodů", pad=10)
 
-    ax8 = plt.subplot2grid((8,4),(7,2), colspan=2, rowspan=1)  # Alpha/Beta table widened
+    ax8 = plt.subplot2grid((8,4),(6,3), colspan=1, rowspan=1)  # Realizovaná alfa/beta vpravo
     ab_tbl = [["alpha_daily",   f"{ab['alpha_daily']:.6f}"],
               ["alpha_annual",  f"{ab['alpha_annual']:.4f}{_stars(ab.get('alpha_p'))}"],
               ["alpha_t",       f"{ab['alpha_t']:.4f}"],
@@ -478,13 +485,14 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
               ["beta_t",        f"{ab['beta_t']:.4f}"],
               ["beta_p",        f"{ab['beta_p']:.4f}"],
               ["r2",            f"{ab['r2']:.4f}"],]
-    table(ax8, ab_tbl, "Realizovaná alfa/beta (Test)", pad=20)
-    try:
-        ax8.text(0.5, -0.18,
+    table(ax8, ab_tbl, "Realizovaná alfa/beta (Test)", pad=10)
+
+    # Poznámka pod obě tabulky (sdílený panel přes 2 sloupce)
+    ax_note = plt.subplot2grid((8,4),(7,2), colspan=2, rowspan=1)
+    ax_note.axis('off')
+    ax_note.text(0.5, 0.5,
                  "* p≤0.10, ** p≤0.05, *** p≤0.01 (two-sided). Stars denote statistical significance of alpha/beta in OLS of daily strategy returns on EW benchmark (test).",
-                 transform=ax8.transAxes, ha='center', va='top', fontsize=8)
-    except Exception:
-        pass
+                 ha='center', va='center', fontsize=8)
 
     fig.savefig(path)
     plt.close(fig)
@@ -554,6 +562,16 @@ def main():
                  'pt_hit_pct': float((trades_df['Hit']=='PT').mean()) if len(trades_df)>0 else 0.0,
                  'sl_hit_pct': float((trades_df['Hit']=='SL').mean()) if len(trades_df)>0 else 0.0}
         ab=alpha_beta_ols(r_test_only, ew_test)
+        beta_hat = float(ab.get('beta', 0.0)) if ab.get('beta') is not None else 0.0
+        # Beta-hedged returns: r_strategy - beta * r_benchmark
+        try:
+            r_hedged_all  = (r_all - beta_hat * ew_all).dropna()
+        except Exception:
+            r_hedged_all = pd.Series(dtype=float)
+        try:
+            r_hedged_test = (r_test_only - beta_hat * ew_test).dropna()
+        except Exception:
+            r_hedged_test = pd.Series(dtype=float)
 
         # IC (Spearman) – cross-sectional by day on TEST
         test_df = df_scaled.loc[df_scaled['Date']>=test_start, ['Date','ID','pred','future_return']].dropna()
@@ -580,6 +598,7 @@ def main():
 
     with Timer("Render PNG"):
         make_png(out_png, train_end, r_all, r_test_only, r_train_only, ew_all, ew_test,
+                 r_hedged_all, r_hedged_test, beta_hat,
                  final_history, reg_train, reg_test, ret_train, ret_test, trade_m, ab, cv_histories,
                  ic_metrics, preds_test)
     dt=time.perf_counter()-t0; log(f"Celkový čas běhu: {int(dt//60)} min {int(dt%60)} s")
