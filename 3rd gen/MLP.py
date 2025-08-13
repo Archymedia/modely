@@ -66,8 +66,8 @@ HYPERPARAMS = {
                       "/mnt/data/VIX_2005_2023.csv"],
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
-        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_finalv3.png",
-        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_finalv2.png",
+        'output_png': "/Users/lindawaisova/Desktop/DP/Git/DP/modely/3rd generation/MLP_dashboard_finalv4.png",
+        'output_fallback_png': r"C:\Users\david\Desktop\lindaPy\MLP_dashboard_finalv4.png",
     },
     'final_model_epochs': 1,
     'cv_epochs': 1,
@@ -376,8 +376,10 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
              ic_metrics, preds_test):
     log(f"Ukládám dashboard PNG: {path}")
     fig = plt.figure(figsize=(18,12), dpi=150, constrained_layout=True)
-    # v2-style layout: 6x4 grid
-    ax1 = plt.subplot2grid((6,4),(0,0), colspan=4, rowspan=2)  # Cum PnL (all)
+    # 8x4 grid: two tall equity charts (rows 0-1 and 2-3),
+    # left bottom: CV MSE (row 4) and Final MSE (rows 5-6),
+    # right side: four tables stacked (rows 4,5,6,7) each spanning two columns
+    ax1 = plt.subplot2grid((8,4),(0,0), colspan=4, rowspan=2)  # Cum PnL (all)
     _, curve_all=max_drawdown_curve(r_all); _, curve_b_all=max_drawdown_curve(ew_all)
     ax1.plot(curve_all.index, curve_all.values, label='Strategie (all)')
     ax1.plot(curve_b_all.index, curve_b_all.values, label='Benchmark EW (all)')
@@ -386,7 +388,7 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     ax1.set_ylabel("Equity (index, start=1.0)")
     ax1.legend(loc='best')
 
-    ax2 = plt.subplot2grid((6,4),(2,0), colspan=4, rowspan=1)  # Cum PnL (test reset)
+    ax2 = plt.subplot2grid((8,4),(2,0), colspan=4, rowspan=2)  # Cum PnL (test reset), now as tall as ax1
     curve_t=(1+r_test.fillna(0)).cumprod(); curve_tb=(1+ew_test.fillna(0)).cumprod()
     ax2.plot(curve_t.index, curve_t.values, label='Strategie (test)')
     ax2.plot(curve_tb.index, curve_tb.values, label='Benchmark EW (test)')
@@ -395,22 +397,27 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     ax2.set_ylabel("Equity (index, start=1.0)")
     ax2.legend(loc='best')
 
-    # 6x4 grid
-    ax3 = plt.subplot2grid((6,4),(3,0), colspan=2, rowspan=1)  # CV MSE per-fold
-    # CV per-fold
+    ax3 = plt.subplot2grid((8,4),(4,0), colspan=2, rowspan=1)  # CV MSE per-fold
+    # Robust CV per-fold plotting (fallback to mse/val_mse keys if loss absent)
     if cv_histories:
-        import itertools
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         for i, hist in enumerate(cv_histories):
             c = colors[i % len(colors)]
-            ax3.plot(hist.get('loss',[]), color=c, alpha=0.9, linewidth=1.5)
-            ax3.plot(hist.get('val_loss',[]), color=c, alpha=0.4, linewidth=1.5)
+            tr = hist.get('loss') or hist.get('mse') or []
+            va = hist.get('val_loss') or hist.get('val_mse') or []
+            if len(tr)==0 and len(va)==0:
+                continue
+            ax3.plot(tr if len(tr)>0 else [np.nan], color=c, alpha=0.9, linewidth=1.5)
+            ax3.plot(va if len(va)>0 else [np.nan], color=c, alpha=0.4, linewidth=1.5)
         ax3.set_title("CV MSE (per fold) — train (tmavě), val (světle)")
     ax3.set_xlabel("Epocha"); ax3.set_ylabel("MSE")
 
-    ax4 = plt.subplot2grid((6,4),(4,0), colspan=2, rowspan=2)  # Final model MSE
-    ax4.plot(final_hist.get('loss',[]), label='Final Train MSE')
-    ax4.plot(final_hist.get('val_loss',[]), label='Final Val MSE')
+    ax4 = plt.subplot2grid((8,4),(5,0), colspan=2, rowspan=2)  # Final model MSE (taller)
+    # Robust final history plotting
+    tr_f = final_hist.get('loss') or final_hist.get('mse') or []
+    va_f = final_hist.get('val_loss') or final_hist.get('val_mse') or []
+    ax4.plot(tr_f if len(tr_f)>0 else [np.nan], label='Final Train MSE')
+    ax4.plot(va_f if len(va_f)>0 else [np.nan], label='Final Val MSE')
     ax4.set_title("Finální model — MSE (epocha)"); ax4.set_xlabel("Epocha"); ax4.set_ylabel("MSE"); ax4.legend(loc='best')
 
     def table(ax, rows, title, pad=6):
@@ -434,7 +441,7 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
     def _stars(p):
         return '***' if (p is not None and p <= 0.01) else ('**' if (p is not None and p <= 0.05) else ('*' if (p is not None and p <= 0.10) else ''))
 
-    ax5 = plt.subplot2grid((6,4),(3,2), colspan=2, rowspan=1)  # Regression table
+    ax5 = plt.subplot2grid((8,4),(4,2), colspan=2, rowspan=1)  # Regression table (wide)
     reg_tbl = [["", "Train", "Test"],
                ["MSE",  f"{reg_train['mse']:.4f}",  f"{reg_test['mse']:.4f}"],
                ["MAE",  f"{reg_train['mae']:.4f}",  f"{reg_test['mae']:.4f}"],
@@ -442,7 +449,7 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                ["R2",   f"{reg_train['r2']:.4f}",   f"{reg_test['r2']:.4f}"],]
     table(ax5, reg_tbl, "Regresní metriky (Train/Test)")
 
-    ax6 = plt.subplot2grid((6,4),(4,2), colspan=2, rowspan=1)  # Return table
+    ax6 = plt.subplot2grid((8,4),(5,2), colspan=2, rowspan=1)  # Return table (wide)
     ret_tbl = [["", "Train", "Test"],
                ["Cum. Return",     f"{ret_train['cum']:.4f}",     f"{ret_test['cum']:.4f}"],
                ["Ann. Return",     f"{ret_train['ann']:.4f}",     f"{ret_test['ann']:.4f}"],
@@ -451,7 +458,7 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                ["Ann. Volatility",  f"{ret_train['vola_ann']:.4f}",f"{ret_test['vola_ann']:.4f}"],]
     table(ax6, ret_tbl, "Výnosové metriky (Train/Test)")
 
-    ax7 = plt.subplot2grid((6,4),(5,2), colspan=1, rowspan=1)  # Trading table
+    ax7 = plt.subplot2grid((8,4),(6,2), colspan=2, rowspan=1)  # Trading table widened
     trades_tbl = [["Win Rate",           f"{trade_m['win_rate']:.4f}"],
                   ["Profit Factor",      f"{trade_m['profit_factor']:.4f}"],
                   ["Avg. Holding (days)",f"{trade_m['avg_holding_days']:.2f}"],
@@ -462,7 +469,7 @@ def make_png(path, train_end, r_all, r_test, r_train, ew_all, ew_test,
                   ["IC IR (ann)",        f"{ic_metrics.get('ic_ir_ann', 0.0):.4f}"],]
     table(ax7, trades_tbl, "Metriky obchodů")
 
-    ax8 = plt.subplot2grid((6,4),(5,3), colspan=1, rowspan=1)  # Alpha/Beta table
+    ax8 = plt.subplot2grid((8,4),(7,2), colspan=2, rowspan=1)  # Alpha/Beta table widened
     ab_tbl = [["alpha_daily",   f"{ab['alpha_daily']:.6f}"],
               ["alpha_annual",  f"{ab['alpha_annual']:.4f}{_stars(ab.get('alpha_p'))}"],
               ["alpha_t",       f"{ab['alpha_t']:.4f}"],
