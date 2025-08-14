@@ -76,11 +76,11 @@ HYPERPARAMS = {
         'optimizer': 'adam',
         'loss': 'mse',
         'batch_size': 64,
-        'CV_epochs': 2,          # kratší trénink pro CV
-        'final_epochs': 2,      # finální trénink na celém developmentu
-        'early_stopping_patience': 1,
+        'CV_epochs': 100,          # kratší trénink pro CV
+        'final_epochs': 100,      # finální trénink na celém developmentu
+        'early_stopping_patience': 10,
         'seed': 42,
-        'k_folds': 2,
+        'k_folds': 3,
         'keras_verbose': 1
     },
     'strategy': {
@@ -944,26 +944,32 @@ def main():
     ohlc_map = make_ohlc_map(df)
     benchmark = compute_benchmark(df)  # denní benchmark přes celé období
 
-    # 9) Strategie (M2M, bariéry) — zvlášť na development a test (použijeme odpovídající podmnožinu kalendáře)
-    # Development signálové dny:
-    dev_dates_ordered = np.unique(pred_dev_df['date_t'])
-    test_dates_ordered = np.unique(pred_test_df['date_t'])
+    # 9) Strategie (M2M, bariéry) — SPOUŠTÍME JEDNOU NA CELÉ OBDOBÍ (bez resetu pozic)
+    # Nejprve spojíme predikce z dev i test do jednoho DataFrame
+    pred_all_df = pd.concat([pred_dev_df, pred_test_df], ignore_index=True).sort_values(['date_t','pred'], ascending=[True, False])
+    all_dates_ordered = np.unique(pred_all_df['date_t'])
 
     strat_cfg = HYPERPARAMS['strategy']
-    # Development
-    pnl_dev, trades_dev = run_strategy(
-        pred_dev_df, ohlc_map, dev_dates_ordered,
+    pnl_all, trades_all = run_strategy(
+        pred_all_df, ohlc_map, all_dates_ordered,
         top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
         tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
-        phase='dev'
+        phase='full'
     )
-    # Test
-    pnl_test, trades_test = run_strategy(
-        pred_test_df, ohlc_map, test_dates_ordered,
-        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
-        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
-        phase='test'
-    )
+
+    # Vyřízneme části pro výpočet metrik
+    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
+    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    pnl_dev = pnl_all[pnl_all.index <= train_end]
+    pnl_test = pnl_all[pnl_all.index >= test_start]
+
+    # Rozdělíme trades pro obchodní metriky (volitelně)
+    if trades_all is not None and not trades_all.empty:
+        trades_dev = trades_all[trades_all['exit_date'] <= train_end]
+        trades_test = trades_all[trades_all['entry_date'] >= test_start]
+    else:
+        trades_dev = trades_all
+        trades_test = trades_all
 
     # 10) Vyhodnocení (Sharpe)
     sr_pd_dev, sr_pa_dev = sharpe_ratio(pnl_dev)
@@ -1026,27 +1032,19 @@ def main():
     hedged_cum_test = (1.0 + hedged_ret).cumprod() - 1.0
 
     # 12) Kumulativní výnosy a graf
-    strat_cum_dev = (1 + pnl_dev).cumprod() - 1.0
-    strat_cum_test = (1 + pnl_test).cumprod() - 1.0
+    strat_cum_full = (1 + pnl_all).cumprod() - 1.0   # Panel 1: nepřerušená křivka
+    strat_cum_test = (1 + pnl_test).cumprod() - 1.0  # Panel 2: rebase na 0 (počítáno od test_start)
     bench_cum = (1 + benchmark).cumprod() - 1.0
-
-    # make test cumulative continue from the end of dev
-    if len(strat_cum_dev) > 0 and len(strat_cum_test) > 0:
-        offset = (1.0 + strat_cum_dev.iloc[-1])
-        strat_cum_test_shifted = (1.0 + strat_cum_test) * float(offset) - 1.0
-    else:
-        strat_cum_test_shifted = strat_cum_test
-    strat_cum_continuous = pd.concat([strat_cum_dev, strat_cum_test_shifted[~strat_cum_test_shifted.index.isin(strat_cum_dev.index)]], axis=0).sort_index()
 
     # Build test-only panel inputs
     test_mask = bench_cum.index >= pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
     bench_cum_test = bench_cum[test_mask]
 
     # doplň hedged_cum_full z dostupného indexu
-    hedged_cum_full = pd.Series(index=strat_cum_continuous.index, dtype=float)
+    hedged_cum_full = pd.Series(index=strat_cum_full.index, dtype=float)
     hedged_cum_full.loc[hedged_cum_test.index] = hedged_cum_test.values
     saved_png = plot_dashboard(
-        strat_cum=strat_cum_continuous,
+        strat_cum=strat_cum_full,
         bench_cum=bench_cum,
         test_start_date=HYPERPARAMS['data']['test_start_date'],
         strat_cum_test=strat_cum_test,
