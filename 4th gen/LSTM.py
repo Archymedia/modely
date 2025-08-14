@@ -89,11 +89,12 @@ HYPERPARAMS = {
         'tp': 0.02,      # +2 %
         'sl': -0.02,     # -2 %
         'priority': 'SL_first',  # pokud High i Low zasáhnou v jednom dni: nejdřív SL, pak TP
+        'engine': 'exact_cached',  # rychlejší přístup k datům (keše indexů/NumPy)
     },
     'output': {
         'png_paths': [
-            "/Users/lindawaisova/Desktop/DP/Git/DP/modely/4th generation/LSTM_dashboard.png",
-            r"C:\Users\david\Desktop\4th generation\LSTM_dashboard.png",
+            "/Users/lindawaisova/Desktop/DP/4th generation/LSTM_dashboard.png",
+            r"C:\Users\david\Desktop\DP\LSTM_dashboard.png",
             os.path.join(os.getcwd(), "LSTM_dashboard.png"),
         ]
     }
@@ -569,31 +570,45 @@ class Position:
 
         return hit_today, realized
 
-def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.02, sl=-0.02, priority='SL_first'):
+def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.02, sl=-0.02, priority='SL_first', phase=None):
     """
     pred_df: DataFrame s predikcemi na úrovni (date_t, RIC, pred, entry OpenAdj_{t+1})
     ohlc_map: dict[RIC] -> DataFrame se sloupci [Date, OpenAdj, HighAdj, LowAdj, CloseAdj] (Sorted)
     dates_ordered: seřazený list unikátních date_t (signálové dny)
     Výstup: series denních PnL strategie (equal-weighted across open positions, M2M) a pomocné info
     """
-    log("Simuluji obchodní strategii s M2M přeceňováním a bariérami ±2 %...")
+    if phase:
+        log(f"Simuluji obchodní strategii ({phase}) s M2M přeceňováním a bariérami ±2 %...")
+    else:
+        log("Simuluji obchodní strategii s M2M přeceňováním a bariérami ±2 %...")
+
+    # --- Rychlejší přístup k datům: keše per RIC ---
+    ric_dates = {}
+    ric_pos_of_date = {}
+    ric_ohlc_np = {}
+    for ric, df_ric in ohlc_map.items():
+        dates_arr = pd.DatetimeIndex(df_ric['Date'].values)
+        ric_dates[ric] = dates_arr
+        # Mapování date -> pozice řádku (místo searchsorted v hot‑loopu)
+        ric_pos_of_date[ric] = {d: i for i, d in enumerate(dates_arr)}
+        # OHLC jako NumPy (rychlé čtení)
+        ric_ohlc_np[ric] = df_ric[['OpenAdj','HighAdj','LowAdj','CloseAdj']].to_numpy()
+
+    # Omez kalendář jen na potřebné dny: od (min signálu + 1 den) dál
+    min_signal_date = pd.to_datetime(pred_df['date_t'].min())
+    start_exec_date = (min_signal_date + pd.Timedelta(days=1))
+    all_dates = pd.DatetimeIndex(
+        np.unique(np.concatenate([ric_dates[ric].values for ric in ric_dates]))
+    )
+    all_dates = all_dates[all_dates >= start_exec_date].sort_values()
+    heartbeat_every = 250  # malé heartbeat logování
+
     positions = []  # otevřené pozice
     daily_pnl = {}
     # Přes den t (signál v t → vstup na t+1 OpenAdj)
     for t in dates_ordered:
         day_preds = pred_df[pred_df['date_t'] == t]
         day_preds = day_preds.sort_values('pred', ascending=False)
-
-        # Uzavři/mark-to-market existující pozice k dnešnímu dni t+1 (tedy s OHLC dne t+1 pro daný RIC)
-        # Pozor: v den t ještě vstupujeme až na t+1 Open, M2M pro otevřené pozice se dělá na date t (s Close t)
-        # Implementace: budeme M2M účtovat na obchodní kalendář date_t (tady pracujeme s date_t jako signálový den).
-        pnl_today = []
-
-        # M2M pro všechny otevřené pozice použije OHLC dne (t+1), protože první den po signálu je entry.
-        # Pro konzistenci budeme indexovat podle obchodních dnů existujících v OHLC mapě.
-        # Vezmeme datum exec_day = další obchodní den po t, který máme v OHLC (per RIC).
-        # Jednodušší: uložili jsme entry na t+1 Open už při vytváření pred_df; pro M2M budeme iterovat přes kalendář skutečných dat v ohlc_map
-        # Proto zde nejprve vstoupíme do nových pozic na t+1 Open, aby M2M od zítřka probíhalo.
 
         # 1) Vstupy do nových pozic podle predikcí (na t+1 Open)
         longs = day_preds.head(top_n)
@@ -604,55 +619,51 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
         for _, row in entries.iterrows():
             ric = row['RIC']
             entry_day = row['date_t'] + timedelta(days=1)  # t+1
-            # najdi OHLC řádek pro ric a entry_day (může být svátek → vezmi nejbližší následující obchodní den)
-            df_ric = ohlc_map.get(ric, None)
-            if df_ric is None:
+            if ric not in ric_dates:
                 continue
-            idx = df_ric['Date'].searchsorted(entry_day)
-            if idx >= len(df_ric):
-                continue  # žádná data po entry — přeskoč
-            entry_row = df_ric.iloc[idx]
-            entry_price = float(entry_row['OpenAdj'])
-            pos = Position(ric=ric, direction=int(row['direction']), entry_date=entry_row['Date'],
+            idx = ric_pos_of_date[ric].get(entry_day, None)
+            if idx is None:
+                # když entry_day není obchodní den, vezmi nejbližší následující
+                dates_arr = ric_dates[ric]
+                ins = dates_arr.searchsorted(entry_day)
+                if ins >= len(dates_arr):
+                    continue
+                idx = int(ins)
+            entry_open, entry_high, entry_low, entry_close = ric_ohlc_np[ric][idx]
+            entry_date_eff = ric_dates[ric][idx]
+            entry_price = float(entry_open)
+            pos = Position(ric=ric, direction=int(row['direction']), entry_date=entry_date_eff,
                            entry_price=entry_price, tp=tp, sl=sl)
-            # nastav referenční 'last_price' pro první M2M den na Close dne entry (po vstupu bude první M2M až další den)
-            pos.last_price = float(entry_row['CloseAdj'])
+            pos.last_price = float(entry_close)
             positions.append(pos)
 
-        # 2) M2M a kontroly bariér pro všechny otevřené pozice s použitím OHLC dne t+1, t+2, ... budou řešeny
-        #    v následujících kalendářních dnech. Abychom měli denní PnL bez mezer, projdeme všechny aktuálně
-        #    otevřené pozice a použijeme k dnešnímu t jejich "dnešní" M2M zisk vůči last_price a Close dne t (pokud existuje).
-        #    To je ale komplikované v rámci pouze signálových dnů; proto zjednodušíme: M2M budeme generovat na
-        #    skutečnou kalendářní osu (sjednocený seznam všech dat z OHLC). Níže vytvoříme po skončení smyčky
-        #    přes t zvláštní denní smyčku napříč kalendářem, která zpracuje bariéry i M2M konzistentně.
-        #    → Tady PnL zatím neplníme.
+        # 2) M2M a kontroly bariér budou řešeny v denní smyčce přes all_dates níže.
         pass
 
-    # === Přesun: plná kalendářní simulace ===
-    # Vytvoř společnou osu obchodních dnů (sjednocení všech 'Date' ze všech RIC)
-    all_dates = pd.DatetimeIndex(pd.to_datetime(np.unique(np.concatenate([df_ric['Date'].values for df_ric in ohlc_map.values()])))).sort_values()
 
     # Mapa: pro každý den vybereme z pred_df nové vstupy, které mají signál včerejška (protože vstup je dnes)
     pred_by_signal = pred_df.groupby('date_t')
 
     daily_pnl_list = []
     for d in all_dates:
+        # Heartbeat log
+        if len(daily_pnl_list) % heartbeat_every == 0 and len(daily_pnl_list) > 0:
+            log(f"  ...simulace {phase or ''}: zpracováno {len(daily_pnl_list)} dní")
         pnl_today = []
 
         # 1) Nejprve zkontroluj bariéry a M2M pro existující pozice na den d
         to_remove = []
         for i, pos in enumerate(positions):
-            df_ric = ohlc_map[pos.ric]
-            # najdi řádek s dnešním dnem (pokud RIC dnes neobchoduje, přeskoč)
-            idx = df_ric['Date'].searchsorted(d)
-            if idx >= len(df_ric) or df_ric.iloc[idx]['Date'] != d:
+            ric = pos.ric
+            idx = ric_pos_of_date[ric].get(d, None)
+            if idx is None:
                 continue
-            row = df_ric.iloc[idx]
+            o, h, l, c = ric_ohlc_np[ric][idx]
             hit_today, realized = pos.check_barriers(
                 date=d,
-                high=float(row['HighAdj']),
-                low=float(row['LowAdj']),
-                close=float(row['CloseAdj']),
+                high=float(h),
+                low=float(l),
+                close=float(c),
                 priority=priority
             )
             pnl_today.append(realized)
@@ -673,18 +684,17 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
             ], axis=0)
             for _, row in entries.iterrows():
                 ric = row['RIC']
-                df_ric = ohlc_map.get(ric, None)
-                if df_ric is None:
+                if ric not in ric_dates:
                     continue
-                idx = df_ric['Date'].searchsorted(d)
-                if idx >= len(df_ric) or df_ric.iloc[idx]['Date'] != d:
+                idx = ric_pos_of_date[ric].get(d, None)
+                if idx is None:
                     continue
-                entry_row = df_ric.iloc[idx]
-                entry_price = float(entry_row['OpenAdj'])
+                o, h, l, c = ric_ohlc_np[ric][idx]
+                entry_price = float(o)
                 pos = Position(ric=ric, direction=int(row['direction']), entry_date=d,
                                entry_price=entry_price, tp=tp, sl=sl)
-                # první M2M bude vůči Close dne d (pro pozici otevřenou dnes), takže referenci nastavíme na Close dne d
-                pos.last_price = float(entry_row['CloseAdj'])
+                # první M2M bude vůči Close dne d
+                pos.last_price = float(c)
                 positions.append(pos)
 
         # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi? V M2M portfoliu je počet pozic proměnný;
@@ -826,13 +836,15 @@ def main():
     pnl_dev = run_strategy(
         pred_dev_df, ohlc_map, dev_dates_ordered,
         top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
-        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority']
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
+        phase='dev'
     )
     # Test
     pnl_test = run_strategy(
         pred_test_df, ohlc_map, test_dates_ordered,
         top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
-        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority']
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
+        phase='test'
     )
 
     # 10) Vyhodnocení (Sharpe)
