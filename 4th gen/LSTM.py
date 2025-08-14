@@ -1,725 +1,885 @@
+# -*- coding: utf-8 -*-
+"""
+LSTM pipeline pro SP100 (2005-2023) s VIX, M2M PnL a bariérami ±2 %.
 
-# ------------------------------------------------------------
-# Fičura call 2 – LSTM pipeline (SP100 + VIX), bariéry ±2 %
-# ------------------------------------------------------------
-# Závislosti: pandas, numpy, scikit-learn, tensorflow (keras), scipy, statsmodels (volitelně)
-# ------------------------------------------------------------
+- Příprava IDContIndex podle pravidla: P2 + OR((A3<>A2), (D3>(D2+20)))
+- Tvorba subsekvencí (okno h) pro LSTM (returns, close norm, high/low rel, open ratio, volume norm)
+- TA indikátory (RSI, CCI, Stochastic %K)
+- VIX subsekvence (VIX_Change)
+- Split: Development (<= 2020-12-31), Test (>= 2021-01-01)
+- k-fold time-based CV na Developmentu (anti-leak na normalizaci: mu/sigma jen z train části; `k_folds` nastavíš v HYPERPARAMS)
+- LSTM: 64 LSTM -> 64 Dense, Adam, batch 64, EarlyStopping patience 10
+- Signály v t → vstup na t+1 OpenAdj, držení do bariéry ±2 % (SL prioritní, pak TP)
+- M2M PnL: denní přeceňování všech otevřených pozic
+- Benchmark: equal-weighted průměr SimpleReturn napříč dostupnými tickery daného dne
+- Realizovaná alfa na test sample (OLS: strategy ~ alpha + beta*benchmark)
+- Graf kumulativních výnosů (strategie vs. benchmark) a uložení PNG
+
+Poznámky:
+- TensorFlow 2.17 (tensorflow-macos) + tensorflow-metal 1.3 funguje s tímto kódem.
+- Kód je paměťově úsporný, ale i tak může trvat déle (hodně sekvencí).
+"""
 
 import os
-import math
-import json
-import random
+import sys
+import time
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
-from typing import List, Tuple, Dict, Optional
-from collections import defaultdict, deque
 
-# TF / Keras
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers, callbacks
+from sklearn.model_selection import KFold
+from sklearn.metrics import mean_squared_error
+from sklearn.utils import shuffle as sk_shuffle
 
-# Sklearn
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import r2_score, mean_squared_error
-
-# Stats
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models, callbacks, optimizers
 
-# Simple timestamped logger
-def log(msg: str):
-    print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] {msg}", flush=True)
-
-# -----------------------------
-# 1) HYPERPARAMS & REPRODUCIBILITA
-# -----------------------------
-
-K_FOLDS = 2  # number of folds for cross-validation
+# =========================
+# ====== HYPERPARAMS ======
+# =========================
 
 HYPERPARAMS = {
     'data': {
-        # 👉 tvoje požadované cesty:
-        'data_path': "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/9DATA_FINAL.csv",
-        'vix_path': "/Users/lindawaisova/Desktop/DP/data/SP_100/VIX/VIX_2005_2023.csv",
+        # Použij nejprve Mac cestu, pokud neexistuje, použij Windows; fallback /mnt/data
+        'data_paths': [
+            "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/9DATA_FINAL.csv",
+            r"C:\Users\david\Desktop\SP100\9DATA_FINAL.csv",
+            "/mnt/data/9DATA_FINAL.csv",
+        ],
+        'vix_paths': [
+            "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/VIX_2005_2023.csv",
+            r"C:\Users\david\Desktop\SP100\VIX_2005_2023.csv",
+            "/mnt/data/VIX_2005_2023.csv",
+        ],
         'train_end_date': '2020-12-31',
         'test_start_date': '2021-01-01',
+        'date_col': 'Date',
+        'id_col': 'ID',
+        'id_cont_col': 'IDContIndex',
+        'ric_col': 'RIC',
     },
-    'seq': {
-        'window': 20,        # h
+    'features': {
+        'window': 15,             # h (délka subsekvence)
+        'use_RSI': True,
+        'use_CCI': True,
+        'use_STOCH': True,
         'rsi_period': 14,
         'cci_period': 20,
-        'stoch_period': 14,
-        'min_obs_per_id': 20 # pro jistotu
+        'stoch_period': 14
     },
     'model': {
         'lstm_units': 64,
         'dense_units': 64,
+        'optimizer': 'adam',
+        'loss': 'mse',
         'batch_size': 64,
-        'epochs': 3,
-        'patience': 1,
-        'learning_rate': 1e-3,
-        'loss': 'mse'
+        'CV_epochs': 2,          # kratší trénink pro CV
+        'final_epochs': 2,      # finální trénink na celém developmentu
+        'early_stopping_patience': 1,
+        'seed': 42,
+        'k_folds': 2,
+        'keras_verbose': 1
     },
     'strategy': {
-        'top_k': 10,
-        'bottom_k': 10,
-        'tp': 0.02,   # +2 %
-        'sl': 0.02,   # -2 %
-        'sl_first': True, # priorita zásahu: nejdřív SL, pak TP
-        'entry_on_open': True,  # vstup na t+1 OpenAdj
+        'top_n': 10,
+        'bottom_n': 10,
+        'tp': 0.02,      # +2 %
+        'sl': -0.02,     # -2 %
+        'priority': 'SL_first',  # pokud High i Low zasáhnou v jednom dni: nejdřív SL, pak TP
     },
-    'random_seed': 42
+    'output': {
+        'png_paths': [
+            "/Users/lindawaisova/Desktop/DP/Git/DP/modely/4th generation/LSTM_dashboard.png",
+            r"C:\Users\david\Desktop\4th generation\LSTM_dashboard.png",
+            os.path.join(os.getcwd(), "LSTM_dashboard.png"),
+        ]
+    }
 }
 
-def set_seeds(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    tf.random.set_seed(seed)
+np.random.seed(HYPERPARAMS['model']['seed'])
+tf.random.set_seed(HYPERPARAMS['model']['seed'])
 
-set_seeds(HYPERPARAMS['random_seed'])
+# =========================
+# ====== UTIL FUNCS =======
+# =========================
 
-# -----------------------------
-# 2) UTIL – TA indikátory (bez leaků – jen z minulosti)
-# -----------------------------
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    up = (delta.clip(lower=0)).ewm(alpha=1/period, adjust=False).mean()
-    down = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = up / (down.replace(0, np.nan))
-    out = 100 - 100 / (1 + rs)
-    return out
+def log(msg: str):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] {msg}")
+    sys.stdout.flush()
 
-def cci(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 20) -> pd.Series:
-    tp = (high + low + close) / 3.0
-    sma = tp.rolling(period).mean()
-    md = (tp - sma).abs().rolling(period).mean()
-    cci = (tp - sma) / (0.015 * md.replace(0, np.nan))
-    return cci
+def find_first_existing(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return paths[-1]  # poslední jako fallback
 
-def stochastic_k(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-    lowest_low = low.rolling(period).min()
-    highest_high = high.rolling(period).max()
-    k = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
-    return k
-
-# -----------------------------
-# 3) DATA LOAD & IDContIndex
-# -----------------------------
-def load_data(data_path: str, vix_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    log("Loading SP100 and VIX data…")
+def load_data():
+    cfg = HYPERPARAMS['data']
+    data_path = find_first_existing(cfg['data_paths'])
+    vix_path = find_first_existing(cfg['vix_paths'])
+    log(f"Načítám SP100 data: {data_path}")
     df = pd.read_csv(data_path)
-    df['Date'] = pd.to_datetime(df['Date'])
-    df.sort_values(['ID', 'Date'], inplace=True)
+    log(f"Načítám VIX data: {vix_path}")
     vix = pd.read_csv(vix_path)
+
+    # Parsování dat
+    df[cfg['date_col']] = pd.to_datetime(df[cfg['date_col']])
     vix['Date'] = pd.to_datetime(vix['Date'])
-    vix.sort_values('Date', inplace=True)
-    log(f"Data loaded: SP100 rows={len(df):,}, VIX rows={len(vix):,}")
+
+    # Seřaď podle ID a data
+    df.sort_values([cfg['id_col'], cfg['date_col']], inplace=True)
+    vix.sort_values(['Date'], inplace=True)
+    vix = vix[['Date', 'VIX_Change']].copy()
     return df, vix
 
-def add_id_cont_index(df: pd.DataFrame) -> pd.DataFrame:
-    # předpoklad: df je seřazené dle ['ID','Date']
-    # Excel vzorec: =P2 + OR((A3<>A2),(D3>(D2+20)))  -> A=ID, D=Date
-    # implementace v pandas:
-    log("Computing IDContIndex (continuous listing periods)…")
+def compute_IDContIndex(df: pd.DataFrame):
+    """ Implementace: P3 = P2 + OR((A3<>A2), (D3 > D2+20)), kde:
+        A = ID, D = Date, P = IDContIndex (1-based; zde vytvoříme 0-based a pak posuneme na 1-based)
+    """
+    cfg = HYPERPARAMS['data']
+    id_col, date_col = cfg['id_col'], cfg['date_col']
+
+    log("Vypočítávám IDContIndex (kontinuální periody členství v indexu)...")
     df = df.copy()
-    df['Date_int'] = (df['Date'].view('int64') // 10**9)  # sekundy
-    # posuny po skupinách ID
-    df['ID_shift'] = df['ID'].shift(1)
-    df['Date_shift'] = df['Date'].shift(1)
-    change_id = (df['ID'] != df['ID_shift']).astype(int)
-    gap = (df['Date'] > (df['Date_shift'] + pd.Timedelta(days=20))).astype(int)
-    trigger = ((change_id == 1) | (gap == 1)).astype(int)
-    # kumulativní součet přes celé df – ale musíme resetovat, když ID se změní:
-    # trik: při change_id==1 dáme trigger=1 (už je), a kumulujeme v rámci celého df
-    df['IDContIndex'] = trigger.cumsum()
-    # Aby šlo lépe číst: spojíme původní ID s IDContIndex (nepovinné)
-    log("IDContIndex computed.")
-    return df.drop(columns=['Date_int', 'ID_shift', 'Date_shift'])
+    df['__id_shift'] = df[id_col].shift(1)
+    df['__date_shift'] = df[date_col].shift(1)
+    # Nový segment startuje, když se změní ID nebo mezera > 20 dní
+    new_segment = (df[id_col] != df['__id_shift']) | ((df[date_col] - df['__date_shift']).dt.days > 20)
+    # kumulativní součet nových segmentů per ID "resetuje" až když se ID změní;
+    # proto to uděláme globálně a pak přemapujeme v rámci každého ID zvlášť.
+    # Jednodušeji: uděláme groupby dle ID a v něm kumulativní sumu new_segment.
+    df['segment'] = new_segment.groupby(df[id_col]).cumsum()
+    # Aby byla IDContIndex unikátní napříč ID, zkombinujeme (ID, segment) do běžícího čítače:
+    # ale pro jednodušší práci zachováme sloupec jako "lokální" index per ID a segment:
+    # Požadavek říká "Proměnná IDContIndex nahrazuje ID akcie." — stačí (ID, segment) → jedinečná kombinace.
+    # Uděláme číselný index přes kategorizaci.
+    df['IDContIndex'] = pd.Categorical(df[id_col].astype(str) + '_' + df['segment'].astype(str)).codes
+    # Úklid
+    df.drop(columns=['__id_shift', '__date_shift', 'segment'], inplace=True)
+    return df
 
-# -----------------------------
-# 4) FEATURE ENGINEERING – subsekvence per IDContIndex
-# -----------------------------
-@dataclass
-class SequenceData:
-    X: np.ndarray        # (N, h, F)
-    y: np.ndarray        # (N,)
-    dates_t: np.ndarray  # (N,) datum t (konec okna)
-    ids: np.ndarray      # (N,) IDContIndex (nebo RIC) pro mapování
-    ric: np.ndarray      # (N,) RIC (kvůli strategii)
+# ----- TA indikátory -----
 
-def build_sequences(df: pd.DataFrame, vix: pd.DataFrame, hparams: dict) -> SequenceData:
-    log(f"Building sequences (h={hparams['seq']['window']}) and technical indicators…")
-    h = hparams['seq']['window']
-    rsi_p = hparams['seq']['rsi_period']
-    cci_p = hparams['seq']['cci_period']
-    stoch_p = hparams['seq']['stoch_period']
-    min_obs = hparams['seq']['min_obs_per_id']
+def rsi(series: pd.Series, period: int = 14):
+    delta = series.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / (avg_loss.replace(0, np.nan))
+    r = 100 - (100 / (1 + rs))
+    return r.fillna(0.0)
 
-    # Merge VIX_Change (globální feature) podle Date
-    vix_small = vix[['Date', 'VIX_Change']].copy()
-    df = df.merge(vix_small, on='Date', how='left')
+def cci(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 20):
+    tp = (high + low + close) / 3.0
+    ma = tp.rolling(period).mean()
+    md = (tp - ma).abs().rolling(period).mean()
+    c = (tp - ma) / (0.015 * md)
+    return c.fillna(0.0)
 
-    # Technické indikátory per IDContIndex (bez leaků – rolling)
-    def compute_ta(g: pd.DataFrame) -> pd.DataFrame:
-        g = g.sort_values('Date').copy()
-        g['RSI'] = rsi(g['CloseAdj'], rsi_p)
-        g['CCI'] = cci(g['HighAdj'], g['LowAdj'], g['CloseAdj'], cci_p)
-        g['STOCHK'] = stochastic_k(g['HighAdj'], g['LowAdj'], g['CloseAdj'], stoch_p)
-        return g
+def stochastic_k(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
+    lowest_low = low.rolling(period).min()
+    highest_high = high.rolling(period).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    return k.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    df = df.groupby('IDContIndex', group_keys=False).apply(compute_ta)
+# ----- Subsekvence builder -----
 
-    # Příprava konstruovaných relativních kanálů (viz zadání)
-    def make_relatives(g: pd.DataFrame) -> pd.DataFrame:
-        g = g.sort_values('Date').copy()
-        # subsequence_return
-        g['RET'] = g['SimpleReturn']
+def build_sequences_for_group(g: pd.DataFrame, h: int, feat_cfg):
+    """
+    Vytvoří subsekvence pro jednu kontinuální periodu (IDContIndex).
+    Vrací: list of dicts: {'date_t': t_date, 'X': (h, C), 'y': scalar, 'keys': ...}
+    """
+    # Očekávané sloupce:
+    # SimpleReturn, OpenAdj, HighAdj, LowAdj, CloseAdj, VolumeAdj
+    # TA: RSI, CCI, STOCH již spočteno v g
+    needed = ['SimpleReturn','OpenAdj','HighAdj','LowAdj','CloseAdj','VolumeAdj','RSI','CCI','STOCH']
+    for col in needed:
+        if col not in g.columns:
+            g[col] = np.nan
 
-        # close normalized to first in window -> budeme stavět až při skládání okna
+    arr = []
+    g = g.reset_index(drop=True)
+    T = len(g)
 
-        # high/low vs. own close
-        g['HIGH_vs_CLOSE'] = g['HighAdj'] / g['CloseAdj'] - 1.0
-        g['LOW_vs_CLOSE']  = g['LowAdj']  / g['CloseAdj'] - 1.0
+    # Pomocné funkce pro subsekvence dle definic
+    def subseq_return(t0, t1):  # inclusive t0..t1
+        return g['SimpleReturn'].iloc[t0:t1+1].values
 
-        # close vs open
-        g['CLOSE_vs_OPEN'] = g['CloseAdj'] / g['OpenAdj'] - 1.0
+    def subseq_close_norm(t0, t1):
+        base = g['CloseAdj'].iloc[t0]
+        seq = g['CloseAdj'].iloc[t0:t1+1].values
+        return (seq / base) - 1.0
 
-        # volume normalized to first in window -> až při skládání
+    def subseq_rel(series_name):
+        # e.g. HighAdj/CloseAdj - 1
+        s = (g[series_name] / g['CloseAdj']) - 1.0
+        return s
 
-        return g
+    def subseq_open_ratio():
+        # CloseAdj/OpenAdj - 1
+        s = (g['CloseAdj'] / g['OpenAdj']) - 1.0
+        return s
 
-    df = df.groupby('IDContIndex', group_keys=False).apply(make_relatives)
+    def subseq_volume_norm(t0, t1):
+        base = g['VolumeAdj'].iloc[t0]
+        seq = g['VolumeAdj'].iloc[t0:t1+1].values
+        return (seq / base) - 1.0
 
-    # Budování oken (h) a targetu y = SimpleReturn(t+1)
-    X_list, y_list, dates_list, id_list, ric_list = [], [], [], [], []
+    # Předpočítáme rel a ratio řady pro rychlost
+    rel_high = subseq_rel('HighAdj').values
+    rel_low  = subseq_rel('LowAdj').values
+    open_ratio = subseq_open_ratio().values
 
-    # Pomocné funkce pro "within-window" normalizace Close/Volume sekvencí podle 1. prvku okna
-    def rel_to_first(arr: np.ndarray) -> np.ndarray:
-        base = arr[0]
-        if base == 0 or np.isnan(base):
-            return np.full_like(arr, np.nan)
-        return arr / base - 1.0
+    # Pro indexování budeme procházet konce oken t = h-1 .. T-2 (protože y=SimpleReturn(t+1))
+    for t in range(h-1, T-1):
+        t0 = t - (h - 1)
+        t1 = t
 
-    # pro každý IDContIndex
-    for idc, g in df.groupby('IDContIndex'):
-        g = g.sort_values('Date')
-        if len(g) < max(min_obs, h + 2):
-            continue
+        # target(t) = SimpleReturn(t+1)
+        y = g['SimpleReturn'].iloc[t+1]
+        if pd.isna(y):
+            continue  # nelze použít
 
-        # Vektory, ze kterých skládáme okna
-        ret = g['RET'].values
-        close = g['CloseAdj'].values
-        high = g['HighAdj'].values
-        low = g['LowAdj'].values
-        openp = g['OpenAdj'].values
-        vol = g['VolumeAdj'].values
-        rsi_v = g['RSI'].values
-        cci_v = g['CCI'].values
-        stoch_v = g['STOCHK'].values
-        vixc = g['VIX_Change'].values
-        dates = g['Date'].values
-        rics = g['RIC'].values
+        # Skládání kanálů: returns, close_norm, high_rel, low_rel, open_ratio, volume_norm, RSI, CCI, STOCH
+        r_seq = subseq_return(t0, t1)
+        c_seq = subseq_close_norm(t0, t1)
+        h_seq = rel_high[t0:t1+1]
+        l_seq = rel_low[t0:t1+1]
+        o_seq = open_ratio[t0:t1+1]
+        v_seq = subseq_volume_norm(t0, t1)
+        rsi_seq = g['RSI'].iloc[t0:t1+1].values if feat_cfg['use_RSI'] else None
+        cci_seq = g['CCI'].iloc[t0:t1+1].values if feat_cfg['use_CCI'] else None
+        sto_seq = g['STOCH'].iloc[t0:t1+1].values if feat_cfg['use_STOCH'] else None
 
-        # skládání oken
-        for t in range(h-1, len(g)-1):  # -1 kvůli targetu t+1
-            # okno končí v t, target je SimpleReturn(t+1)
-            y = ret[t+1]
-            # subsekvence
-            win_slice = slice(t-h+1, t+1)
-            ret_seq   = ret[win_slice]
-            close_seq = rel_to_first(close[win_slice])
-            high_seq  = (high[win_slice] / close[win_slice]) - 1.0
-            low_seq   = (low[win_slice]  / close[win_slice]) - 1.0
-            open_seq  = (close[win_slice] / openp[win_slice]) - 1.0
-            vol_seq   = rel_to_first(vol[win_slice])
+        # Stack kanálů do (h, C)
+        channels = [r_seq, c_seq, h_seq, l_seq, o_seq, v_seq]
+        names = ["RET","CLOSE_N","HIGH_REL","LOW_REL","OPEN_RATIO","VOL_N"]
+        if rsi_seq is not None:
+            channels.append(rsi_seq); names.append("RSI")
+        if cci_seq is not None:
+            channels.append(cci_seq); names.append("CCI")
+        if sto_seq is not None:
+            channels.append(sto_seq); names.append("STOCH")
 
-            rsi_seq   = rsi_v[win_slice]
-            cci_seq   = cci_v[win_slice]
-            stoch_seq = stoch_v[win_slice]
-            vix_seq   = vixc[win_slice]
+        X = np.vstack(channels).T  # shape (h, C)
+        # Meta informace pro strategii a pro VIX doplníme později
+        arr.append({
+            'date_t': g['Date'].iloc[t],          # konec okna (signál v t)
+            'idcont': g['IDContIndex'].iloc[t],
+            'id': g['ID'].iloc[t],
+            'ric': g.get('RIC', pd.Series([None])).iloc[t] if 'RIC' in g.columns else None,
+            'X': X,
+            'y': y,
+            'OpenAdj_t1': g['OpenAdj'].iloc[t+1],  # vstupní cena na t+1
+            'HighAdj_t1': g['HighAdj'].iloc[t+1],
+            'LowAdj_t1': g['LowAdj'].iloc[t+1],
+            'CloseAdj_t1': g['CloseAdj'].iloc[t+1],
+            'row_idx_t': t
+        })
+    return arr, names
 
-            seq_mat = np.vstack([
-                ret_seq,
-                close_seq,
-                high_seq,
-                low_seq,
-                open_seq,
-                vol_seq,
-                rsi_seq,
-                cci_seq,
-                stoch_seq,
-                vix_seq
-            ]).T  # (h, F=10)
-
-            if np.isnan(seq_mat).any() or np.isinf(seq_mat).any():
+def attach_vix_sequences(seq_list, vix_df, h):
+    """
+    Ke každé sekvenci doplní kanál VIX_Change subseq [t-h+1..t]
+    Standardizace VIX se bude dělat až při normalizaci (globální mu/sigma z dev-train).
+    """
+    # Precompute dict: date -> rolling window of VIX_Change ending at date
+    vix = vix_df.set_index('Date')['VIX_Change'].sort_index()
+    # Pro rychlost naplníme do Series a budeme si tahat okno per date.
+    for item in seq_list:
+        t_date = item['date_t']
+        t0_date = t_date - timedelta(days=365*10)  # nepotřebujeme, jen placeholder
+        # Vezmeme posledních h obchodních vix hodnot <= t_date
+        # protože VIX má trading dny, použijeme index slice
+        if t_date not in vix.index:
+            # pokud není přesně tento obchodní den ve VIX (svátky), vezmi nejbližší menší
+            prior_dates = vix.index[vix.index <= t_date]
+            if len(prior_dates) == 0:
+                vix_seq = np.zeros(h)
+                item['X'] = np.hstack([item['X'], vix_seq.reshape(-1,1)])
+                item['feat_names'] = item.get('feat_names', []) + ['VIX_CHG']
                 continue
+            t_date_eff = prior_dates[-1]
+        else:
+            t_date_eff = t_date
+        # okno h hodnot končící v t_date_eff
+        idx_pos = vix.index.get_loc(t_date_eff)
+        start = max(0, idx_pos - (h - 1))
+        window = vix.iloc[start:idx_pos+1].values
+        if len(window) < h:
+            # dopadujeme nulami na začátku (konzervativně)
+            window = np.pad(window, (h - len(window), 0))
+        vix_seq = window[-h:]
+        item['X'] = np.hstack([item['X'], vix_seq.reshape(-1,1)])
+        item['feat_names'] = item.get('feat_names', []) + ['VIX_CHG']
+    return seq_list
 
-            X_list.append(seq_mat)
-            y_list.append(y)
-            dates_list.append(dates[t])     # datum t (konec okna)
-            id_list.append(idc)
-            ric_list.append(rics[t])
+def compute_ta_per_idcont(df):
+    feat = HYPERPARAMS['features']
+    log("Počítám TA indikátory (RSI, CCI, Stochastic %K) per IDContIndex...")
+    out = []
+    for _, g in df.groupby('IDContIndex'):
+        g = g.sort_values('Date').copy()
+        if feat['use_RSI']:
+            g['RSI'] = rsi(g['CloseAdj'], feat['rsi_period'])
+        else:
+            g['RSI'] = 0.0
+        if feat['use_CCI']:
+            g['CCI'] = cci(g['HighAdj'], g['LowAdj'], g['CloseAdj'], feat['cci_period'])
+        else:
+            g['CCI'] = 0.0
+        if feat['use_STOCH']:
+            g['STOCH'] = stochastic_k(g['HighAdj'], g['LowAdj'], g['CloseAdj'], feat['stoch_period'])
+        else:
+            g['STOCH'] = 0.0
+        out.append(g)
+    return pd.concat(out, axis=0).sort_values(['IDContIndex','Date']).reset_index(drop=True)
 
-    X = np.array(X_list, dtype=np.float32)      # (N,h,F)
-    y = np.array(y_list, dtype=np.float32)      # (N,)
-    dates_t = np.array(dates_list)              # (N,)
-    ids = np.array(id_list)
-    ric = np.array(ric_list)
+def build_all_sequences(df, vix):
+    h = HYPERPARAMS['features']['window']
+    feat_cfg = HYPERPARAMS['features']
+    log(f"Tvořím subsekvence (okno h={h}) pro všechny kontinuální periody...")
+    all_seqs = []
+    feat_names_ref = None
+    for _, g in df.groupby('IDContIndex'):
+        seqs, feat_names = build_sequences_for_group(g, h, feat_cfg)
+        if feat_names_ref is None:
+            feat_names_ref = feat_names[:]  # základ bez VIX
+        all_seqs.extend(seqs)
+    log(f"Počet subsekvencí (vzorků): {len(all_seqs):,}")
+    # Připojíme VIX subsekvence
+    all_seqs = attach_vix_sequences(all_seqs, vix, h)
+    # finální seznam jmen feature kanálů:
+    feat_names_final = feat_names_ref + ['VIX_CHG']
+    return all_seqs, feat_names_final
 
-    log(f"Sequences ready: X={len(X_list):,} windows, features per step={X_list[0].shape[1] if X_list else 'N/A'}")
-    return SequenceData(X, y, dates_t, ids, ric)
+def split_dev_test(all_seqs):
+    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
+    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    dev = [s for s in all_seqs if s['date_t'] <= train_end]
+    test = [s for s in all_seqs if s['date_t'] >= test_start]
+    log(f"Split dev/test: dev={len(dev):,} vzorků (<= {train_end.date()}), test={len(test):,} vzorků (>= {test_start.date()})")
+    return dev, test
 
-# -----------------------------
-# 5) DEV/TEST SPLIT + 3-fold CV s anti‑leakage normalizací
-# -----------------------------
-@dataclass
-class SplitIdx:
-    dev_idx: np.ndarray
-    test_idx: np.ndarray
+def stack_Xy(seq_list):
+    X = np.stack([s['X'] for s in seq_list], axis=0)  # (N, h, C)
+    y = np.array([s['y'] for s in seq_list], dtype=float)  # (N,)
+    dates = np.array([s['date_t'] for s in seq_list])
+    ids = np.array([s['id'] for s in seq_list])
+    idconts = np.array([s['idcont'] for s in seq_list])
+    meta = {
+        'OpenAdj_t1': np.array([s['OpenAdj_t1'] for s in seq_list]),
+        'HighAdj_t1': np.array([s['HighAdj_t1'] for s in seq_list]),
+        'LowAdj_t1':  np.array([s['LowAdj_t1'] for s in seq_list]),
+        'CloseAdj_t1':np.array([s['CloseAdj_t1'] for s in seq_list]),
+        'RIC': np.array([s['ric'] for s in seq_list], dtype=object)
+    }
+    return X, y, dates, ids, idconts, meta
 
-def dev_test_split(dates_t: np.ndarray, train_end_date: str, test_start_date: str) -> SplitIdx:
-    dev_mask  = dates_t <= np.datetime64(train_end_date)
-    test_mask = dates_t >= np.datetime64(test_start_date)
-    dev_idx = np.where(dev_mask)[0]
-    test_idx = np.where(test_mask)[0]
-    return SplitIdx(dev_idx, test_idx)
+def compute_mu_sigma(X):
+    # mu,sigma přes všechny akcie a všechny subsekvence – per feature kanál, přes čas i vzorky
+    # X shape: (N, h, C) -> agregujeme přes N a h → (C,)
+    mu = X.reshape(-1, X.shape[-1]).mean(axis=0)
+    sigma = X.reshape(-1, X.shape[-1]).std(axis=0, ddof=1)
+    sigma[sigma == 0] = 1.0
+    return mu, sigma
 
-class PerFeatureScaler:
-    """μ,σ per feature (agregace přes všechny timesteps), fit pouze na train."""
-    def __init__(self):
-        self.mu = None
-        self.sd = None
+def standardize_with(X, mu, sigma):
+    return (X - mu) / sigma
 
-    def fit(self, X: np.ndarray):
-        # X: (N,h,F)
-        # zploštíme timesteps
-        N, h, F = X.shape
-        Xf = X.reshape(-1, F)
-        self.mu = np.nanmean(Xf, axis=0)
-        self.sd = np.nanstd(Xf, axis=0)
-        self.sd[self.sd == 0] = 1.0
-
-    def transform(self, X: np.ndarray) -> np.ndarray:
-        return (X - self.mu) / self.sd
-
-def make_lstm(input_shape: Tuple[int, int], hparams: dict) -> keras.Model:
-    h, F = input_shape
-    inp = keras.Input(shape=(h, F))
-    x = layers.Masking(mask_value=np.nan)(inp)  # pro jistotu, neměly by tam být NaNs
-    x = layers.LSTM(hparams['model']['lstm_units'])(x)
-    x = layers.Dense(hparams['model']['dense_units'], activation='relu')(x)
-    out = layers.Dense(1, activation='linear')(x)
-    model = keras.Model(inp, out)
-    opt = keras.optimizers.Adam(learning_rate=hparams['model']['learning_rate'])
-    model.compile(optimizer=opt, loss=hparams['model']['loss'])
+def build_lstm_model(input_shape, hp):
+    model = models.Sequential([
+        layers.Input(shape=input_shape),
+        layers.LSTM(hp['lstm_units']),
+        layers.Dense(hp['dense_units'], activation='relu'),
+        layers.Dense(1, activation='linear')
+    ])
+    model.compile(optimizer=hp['optimizer'], loss=hp['loss'])
     return model
 
-@dataclass
-class CVResult:
-    val_losses: List[float]
-    models: List[keras.Model]
-    scalers: List[PerFeatureScaler]
+def cv_train_lstm(X_dev, y_dev, dates_dev):
+    """ k-fold time-based split přes datumy v dev. """
+    hp = HYPERPARAMS['model']
+    k_folds = int(hp.get('k_folds', 3))
+    log(f"Spouštím {k_folds}-fold time-based cross-validaci (bez leaků v normalizaci)...")
+    N = len(y_dev)
+    order = np.argsort(dates_dev)
+    X_dev = X_dev[order]
+    y_dev = y_dev[order]
+    dates_dev = dates_dev[order]
 
-def cross_val_train(X_dev: np.ndarray, y_dev: np.ndarray, dates_dev: np.ndarray, hparams: dict) -> CVResult:
-    # 3 časové foldy podle dat (bez míšení budoucnosti do minulosti)
-    # rozdělíme podle kvantilů datumů
-    uniq_dates = np.sort(np.unique(dates_dev))
-    folds = K_FOLDS
-    log("Starting 3-fold time-series cross-validation…")
-    tss = TimeSeriesSplit(n_splits=folds)
-    val_losses, models, scalers = [], [], []
+    # rozdělíme development na k_folds chronologických bloků
+    folds = np.array_split(np.arange(N), k_folds)
+    val_losses = []
+    models_trained = []
 
-    for fold_id, (train_idx_pos, val_idx_pos) in enumerate(tss.split(uniq_dates)):
-        # map zpět na indexy vzorků podle data
-        train_dates = set(uniq_dates[train_idx_pos])
-        val_dates   = set(uniq_dates[val_idx_pos])
-        train_idx = np.where(np.isin(dates_dev, list(train_dates)))[0]
-        val_idx   = np.where(np.isin(dates_dev, list(val_dates)))[0]
-        log(f"CV fold {fold_id+1}/{folds}: train={len(train_idx):,}, val={len(val_idx):,}")
+    for fold_idx in range(k_folds):
+        val_idx = folds[fold_idx]
+        train_idx = np.concatenate([folds[i] for i in range(k_folds) if i != fold_idx])
 
-        X_tr, y_tr = X_dev[train_idx], y_dev[train_idx]
-        X_va, y_va = X_dev[val_idx], y_dev[val_idx]
+        X_train, y_train = X_dev[train_idx], y_dev[train_idx]
+        X_val, y_val = X_dev[val_idx], y_dev[val_idx]
 
-        # anti‑leakage scaler fit jen na train
-        scaler = PerFeatureScaler()
-        scaler.fit(X_tr)
-        X_trn = scaler.transform(X_tr)
-        X_val = scaler.transform(X_va)
+        # mu/sigma jen z train části fold-u
+        mu, sigma = compute_mu_sigma(X_train)
+        X_train_n = standardize_with(X_train, mu, sigma)
+        X_val_n   = standardize_with(X_val,   mu, sigma)
 
-        cb = [
-            callbacks.EarlyStopping(monitor='val_loss', patience=hparams['model']['patience'],
-                                    restore_best_weights=True, verbose=0)
-        ]
-
-        model = make_lstm((X_trn.shape[1], X_trn.shape[2]), hparams)
+        model = build_lstm_model(input_shape=X_train_n.shape[1:], hp=hp)
+        es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
         hist = model.fit(
-            X_trn, y_tr,
-            validation_data=(X_val, y_va),
-            epochs=hparams['model']['epochs'],
-            batch_size=hparams['model']['batch_size'],
-            verbose=1,
-            callbacks=cb
+            X_train_n, y_train,
+            validation_data=(X_val_n, y_val),
+            epochs=hp['CV_epochs'],
+            batch_size=hp['batch_size'],
+            verbose=HYPERPARAMS['model'].get('keras_verbose', 1),
+            callbacks=[es]
         )
         best_val = min(hist.history['val_loss'])
         val_losses.append(best_val)
-        models.append(model)
-        scalers.append(scaler)
-        print(f"[CV fold {fold_id+1}/{folds}] best val_loss={best_val:.6f} (n_train={len(train_idx)}, n_val={len(val_idx)})")
+        models_trained.append((model, mu, sigma))
+        log(f"Fold {fold_idx+1}/{k_folds} hotov. Nejlepší val_loss={best_val:.6f}")
 
-    return CVResult(val_losses, models, scalers)
+    best_fold = int(np.argmin(val_losses))
+    log(f"CV hotovo. Val loss per fold: {[round(v,6) for v in val_losses]} → vybírám fold {best_fold+1}")
+    best_model, best_mu, best_sigma = models_trained[best_fold]
+    return best_model, best_mu, best_sigma
 
-def retrain_on_full_dev(X_dev: np.ndarray, y_dev: np.ndarray, hparams: dict) -> Tuple[keras.Model, PerFeatureScaler]:
-    log("Retraining final model on full DEV set…")
-    scaler = PerFeatureScaler()
-    scaler.fit(X_dev)
-    X_devn = scaler.transform(X_dev)
-    model = make_lstm((X_devn.shape[1], X_devn.shape[2]), hparams)
-    cb = [
-        callbacks.EarlyStopping(monitor='loss', patience=hparams['model']['patience'],
-                                restore_best_weights=True, verbose=0)
-    ]
-    model.fit(
-        X_devn, y_dev,
-        validation_split=0.0,
-        epochs=hparams['model']['epochs'],
-        batch_size=hparams['model']['batch_size'],
-        verbose=1,
-        callbacks=cb
+def final_train_lstm(X_dev, y_dev):
+    """ Finální trénink na celém developmentu; mu/sigma z celého developmentu. """
+    log("Finální trénink LSTM na celém development setu...")
+    hp = HYPERPARAMS['model']
+    mu, sigma = compute_mu_sigma(X_dev)
+    X_dev_n = standardize_with(X_dev, mu, sigma)
+
+    model = build_lstm_model(input_shape=X_dev_n.shape[1:], hp=hp)
+    es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
+    hist = model.fit(
+        X_dev_n, y_dev,
+        validation_split=0.1,   # malý holdout pro kontrolu ES
+        epochs=hp['final_epochs'],
+        batch_size=hp['batch_size'],
+        verbose=HYPERPARAMS['model'].get('keras_verbose', 1),
+        callbacks=[es]
     )
-    log("Final DEV model trained.")
-    return model, scaler
+    log(f"Finální trénink hotov. Nejlepší val_loss={min(hist.history['val_loss']):.6f}")
+    return model, mu, sigma
 
-# -----------------------------
-# 6) PREDIKCE + STRATEGIE (long/short, bariéry ±2 %)
-# -----------------------------
-@dataclass
-class Predictions:
-    dates_t: np.ndarray
-    ric: np.ndarray
-    idc: np.ndarray
-    y_true: np.ndarray
-    y_pred: np.ndarray
+def predict_with(model, X, mu, sigma):
+    Xn = standardize_with(X, mu, sigma)
+    preds = model.predict(Xn, verbose=HYPERPARAMS['model'].get('keras_verbose', 1)).ravel()
+    return preds
 
-def predict_with_model(model: keras.Model, scaler: PerFeatureScaler, X: np.ndarray, y: np.ndarray,
-                       dates_t: np.ndarray, ric: np.ndarray, idc: np.ndarray) -> Predictions:
-    log(f"Predicting {len(y)} samples…")
-    Xn = scaler.transform(X)
-    yhat = model.predict(Xn, verbose=0).reshape(-1)
-    log("Predictions done.")
-    return Predictions(dates_t, ric, idc, y, yhat)
+# ----- Benchmark a PnL -----
 
-# --- strategie s bariérami ---
-@dataclass
-class Trade:
-    ric: str
-    side: int        # +1 long, -1 short
-    entry_date: np.datetime64
-    entry_price: float
-    size: float      # notional (1.0 == 100%)
-    open: bool = True
+def compute_benchmark(df):
+    """ Equal-weighted průměrný SimpleReturn napříč všemi akciemi, pro každý den. """
+    log("Počítám benchmark (equal-weighted průměr SimpleReturn napříč tickery)...")
+    bench = df.groupby('Date')['SimpleReturn'].mean().sort_index()
+    return bench
 
-@dataclass
-class StrategyResult:
-    daily_pnl: pd.Series              # realizované PnL (vrací se v den exitů)
-    equity_curve: pd.Series
-    sharpe_pd: float
-    sharpe_pa: float
-    trades: List[Dict]
-    alpha: float
-    alpha_tstat: float
+class Position:
+    def __init__(self, ric, direction, entry_date, entry_price, tp, sl):
+        self.ric = ric
+        self.direction = direction  # +1 long, -1 short
+        self.entry_date = entry_date
+        self.entry_price = float(entry_price)
+        self.tp = tp
+        self.sl = sl
+        self.is_open = True
+        self.last_price = entry_price  # pro M2M referenci (Close předchozího dne)
+        self.exit_date = None
+        self.exit_price = None
 
-def simulate_barrier_strategy(pred: Predictions, raw_df: pd.DataFrame, hparams: dict) -> StrategyResult:
-    log("Simulating barrier strategy (±2%)…")
+    def check_barriers(self, date, high, low, close, priority='SL_first'):
+        """ Kontrola zásahu bariér v 'date'.
+            Pokud zasáhne, nastaví exit a uzavře pozici s realizovaným výnosem od entry.
+            Vrať tuple (closed_today: bool, realized_pnl: float or 0 for today portion).
+        """
+        if not self.is_open:
+            return False, 0.0
+
+        # Bariérové ceny
+        if self.direction == +1:  # long
+            tp_price = self.entry_price * (1 + self.tp)
+            sl_price = self.entry_price * (1 + self.sl)
+            hit_tp = high >= tp_price
+            hit_sl = low <= sl_price
+        else:  # short
+            tp_price = self.entry_price * (1 + self.sl)  # pro short je TP při poklesu o 2 % (zrcadlově)
+            sl_price = self.entry_price * (1 + self.tp)  # SL při růstu o 2 %
+            hit_tp = low <= tp_price
+            hit_sl = high >= sl_price
+
+        # Pokud zasáhne obě: použij prioritu
+        hit_today = False
+        realized = 0.0
+        if hit_sl and hit_tp:
+            if priority == 'SL_first':
+                # konzervativně nejdřív SL
+                exit_price = sl_price
+            else:
+                exit_price = tp_price
+            self.exit_date = date
+            self.exit_price = exit_price
+            self.is_open = False
+            hit_today = True
+            # Realizovaný celkový výnos od entry do exit:
+            # pro long: (exit/entry - 1), pro short: (entry/exit - 1)
+            if self.direction == +1:
+                realized = (self.exit_price / self.entry_price) - 1.0
+            else:
+                realized = (self.entry_price / self.exit_price) - 1.0
+
+        elif hit_sl:
+            exit_price = sl_price
+            self.exit_date = date
+            self.exit_price = exit_price
+            self.is_open = False
+            hit_today = True
+            if self.direction == +1:
+                realized = (self.exit_price / self.entry_price) - 1.0
+            else:
+                realized = (self.entry_price / self.exit_price) - 1.0
+
+        elif hit_tp:
+            exit_price = tp_price
+            self.exit_date = date
+            self.exit_price = exit_price
+            self.is_open = False
+            hit_today = True
+            if self.direction == +1:
+                realized = (self.exit_price / self.entry_price) - 1.0
+            else:
+                realized = (self.entry_price / self.exit_price) - 1.0
+        else:
+            # Bez zásahu: pro M2M denní zisk použijeme Close dne t vůči včerejší referenci:
+            # pro long: (Close/last - 1), pro short: (last/Close - 1)
+            if self.direction == +1:
+                realized = (close / self.last_price) - 1.0
+            else:
+                realized = (self.last_price / close) - 1.0
+            # Posuň referenci pro další den
+            self.last_price = close
+
+        return hit_today, realized
+
+def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.02, sl=-0.02, priority='SL_first'):
     """
-    - Signál z okna končícího v t => vstup t+1 OpenAdj
-    - Každý den vyber top_k/bottom_k podle predikce
-    - Bariéry ± tp/sl (priorita SL first pokud sl_first=True)
-    - Výnos realizujeme v den zasažení bariéry (připsán do daily PnL)
-    - OHLC z raw_df (per RIC & Date); používáme *_Adj
+    pred_df: DataFrame s predikcemi na úrovni (date_t, RIC, pred, entry OpenAdj_{t+1})
+    ohlc_map: dict[RIC] -> DataFrame se sloupci [Date, OpenAdj, HighAdj, LowAdj, CloseAdj] (Sorted)
+    dates_ordered: seřazený list unikátních date_t (signálové dny)
+    Výstup: series denních PnL strategie (equal-weighted across open positions, M2M) a pomocné info
     """
-    top_k = hparams['strategy']['top_k']
-    bottom_k = hparams['strategy']['bottom_k']
-    tp = hparams['strategy']['tp']
-    sl = hparams['strategy']['sl']
-    sl_first = hparams['strategy']['sl_first']
+    log("Simuluji obchodní strategii s M2M přeceňováním a bariérami ±2 %...")
+    positions = []  # otevřené pozice
+    daily_pnl = {}
+    # Přes den t (signál v t → vstup na t+1 OpenAdj)
+    for t in dates_ordered:
+        day_preds = pred_df[pred_df['date_t'] == t]
+        day_preds = day_preds.sort_values('pred', ascending=False)
 
-    # Připravíme OHLC pivoty: pro rychlý přístup k cenám
-    px = raw_df[['RIC','Date','OpenAdj','HighAdj','LowAdj','CloseAdj']].copy()
-    px['Date'] = pd.to_datetime(px['Date'])
-    px = px.sort_values(['RIC','Date'])
+        # Uzavři/mark-to-market existující pozice k dnešnímu dni t+1 (tedy s OHLC dne t+1 pro daný RIC)
+        # Pozor: v den t ještě vstupujeme až na t+1 Open, M2M pro otevřené pozice se dělá na date t (s Close t)
+        # Implementace: budeme M2M účtovat na obchodní kalendář date_t (tady pracujeme s date_t jako signálový den).
+        pnl_today = []
 
-    # groupby pro vyhledávání podle RIC
-    ric_groups = {ric: g.set_index('Date') for ric, g in px.groupby('RIC')}
-    all_dates = np.sort(np.unique(px['Date'].values))
+        # M2M pro všechny otevřené pozice použije OHLC dne (t+1), protože první den po signálu je entry.
+        # Pro konzistenci budeme indexovat podle obchodních dnů existujících v OHLC mapě.
+        # Vezmeme datum exec_day = další obchodní den po t, který máme v OHLC (per RIC).
+        # Jednodušší: uložili jsme entry na t+1 Open už při vytváření pred_df; pro M2M budeme iterovat přes kalendář skutečných dat v ohlc_map
+        # Proto zde nejprve vstoupíme do nových pozic na t+1 Open, aby M2M od zítřka probíhalo.
 
-    # Predikce jako DataFrame podle dne t a RIC
-    pred_df = pd.DataFrame({
-        'Date_t': pd.to_datetime(pred.dates_t),
-        'RIC': pred.ric,
-        'y_pred': pred.y_pred,
-        'y_true': pred.y_true
-    })
-    pred_df = pred_df.sort_values(['Date_t','y_pred'], ascending=[True, False])
+        # 1) Vstupy do nových pozic podle predikcí (na t+1 Open)
+        longs = day_preds.head(top_n)
+        shorts = day_preds.tail(bottom_n)
+        entries = pd.concat([longs.assign(direction=+1), shorts.assign(direction=-1)], axis=0)
 
-    # Z denních predikcí (Date_t) vyber top/bottom
-    daily_signals = {}
-    for d, g in pred_df.groupby('Date_t'):
-        longs = g.nlargest(top_k, 'y_pred')['RIC'].tolist()
-        shorts = g.nsmallest(bottom_k, 'y_pred')['RIC'].tolist()
-        daily_signals[d] = {'longs': longs, 'shorts': shorts}
-
-    # Simulace portfolia
-    open_trades: Dict[str, List[Trade]] = defaultdict(list)
-    pnl = defaultdict(float)  # pnl per date
-    executed_trades = []
-
-    # projdeme kalendářně
-    for i, d in enumerate(all_dates[:-1]):  # poslední den už nemá t+1 open k vstupu
-        # 1) Uzavírání starých podle bariér – kontrolujeme pro všechny otevřené
-        for ric, trades in list(open_trades.items()):
-            g = ric_groups.get(ric)
-            if g is None:
+        # Přidej nové pozice
+        for _, row in entries.iterrows():
+            ric = row['RIC']
+            entry_day = row['date_t'] + timedelta(days=1)  # t+1
+            # najdi OHLC řádek pro ric a entry_day (může být svátek → vezmi nejbližší následující obchodní den)
+            df_ric = ohlc_map.get(ric, None)
+            if df_ric is None:
                 continue
-            if d not in g.index:
+            idx = df_ric['Date'].searchsorted(entry_day)
+            if idx >= len(df_ric):
+                continue  # žádná data po entry — přeskoč
+            entry_row = df_ric.iloc[idx]
+            entry_price = float(entry_row['OpenAdj'])
+            pos = Position(ric=ric, direction=int(row['direction']), entry_date=entry_row['Date'],
+                           entry_price=entry_price, tp=tp, sl=sl)
+            # nastav referenční 'last_price' pro první M2M den na Close dne entry (po vstupu bude první M2M až další den)
+            pos.last_price = float(entry_row['CloseAdj'])
+            positions.append(pos)
+
+        # 2) M2M a kontroly bariér pro všechny otevřené pozice s použitím OHLC dne t+1, t+2, ... budou řešeny
+        #    v následujících kalendářních dnech. Abychom měli denní PnL bez mezer, projdeme všechny aktuálně
+        #    otevřené pozice a použijeme k dnešnímu t jejich "dnešní" M2M zisk vůči last_price a Close dne t (pokud existuje).
+        #    To je ale komplikované v rámci pouze signálových dnů; proto zjednodušíme: M2M budeme generovat na
+        #    skutečnou kalendářní osu (sjednocený seznam všech dat z OHLC). Níže vytvoříme po skončení smyčky
+        #    přes t zvláštní denní smyčku napříč kalendářem, která zpracuje bariéry i M2M konzistentně.
+        #    → Tady PnL zatím neplníme.
+        pass
+
+    # === Přesun: plná kalendářní simulace ===
+    # Vytvoř společnou osu obchodních dnů (sjednocení všech 'Date' ze všech RIC)
+    all_dates = pd.DatetimeIndex(pd.to_datetime(np.unique(np.concatenate([df_ric['Date'].values for df_ric in ohlc_map.values()])))).sort_values()
+
+    # Mapa: pro každý den vybereme z pred_df nové vstupy, které mají signál včerejška (protože vstup je dnes)
+    pred_by_signal = pred_df.groupby('date_t')
+
+    daily_pnl_list = []
+    for d in all_dates:
+        pnl_today = []
+
+        # 1) Nejprve zkontroluj bariéry a M2M pro existující pozice na den d
+        to_remove = []
+        for i, pos in enumerate(positions):
+            df_ric = ohlc_map[pos.ric]
+            # najdi řádek s dnešním dnem (pokud RIC dnes neobchoduje, přeskoč)
+            idx = df_ric['Date'].searchsorted(d)
+            if idx >= len(df_ric) or df_ric.iloc[idx]['Date'] != d:
                 continue
-            o = g.at[d, 'OpenAdj']
-            h = g.at[d, 'HighAdj']
-            l = g.at[d, 'LowAdj']
-            c = g.at[d, 'CloseAdj']
+            row = df_ric.iloc[idx]
+            hit_today, realized = pos.check_barriers(
+                date=d,
+                high=float(row['HighAdj']),
+                low=float(row['LowAdj']),
+                close=float(row['CloseAdj']),
+                priority=priority
+            )
+            pnl_today.append(realized)
+            if hit_today and not pos.is_open:
+                to_remove.append(i)
 
-            new_list = []
-            for tr in trades:
-                if not tr.open:
+        # odstraň uzavřené (od konce, aby se indexy neposunuly)
+        for i in reversed(to_remove):
+            positions.pop(i)
+
+        # 2) Poté založ nové pozice z dne d-1 (signál včera → vstup dnes na Open)
+        yesterday = d - timedelta(days=1)
+        if yesterday in pred_by_signal.groups:
+            day_preds = pred_by_signal.get_group(yesterday).sort_values('pred', ascending=False)
+            entries = pd.concat([
+                day_preds.head(top_n).assign(direction=+1),
+                day_preds.tail(bottom_n).assign(direction=-1)
+            ], axis=0)
+            for _, row in entries.iterrows():
+                ric = row['RIC']
+                df_ric = ohlc_map.get(ric, None)
+                if df_ric is None:
                     continue
-                # od vstupního dne dál sledujeme OHLC – dnes kontrolujeme
-                # výstupní cena při hitu bariéry = přesně bariéra (konzervativní předpoklad)
-                hit = None
-                if tr.side == +1:
-                    tp_px = tr.entry_price * (1 + tp)
-                    sl_px = tr.entry_price * (1 - sl)
-                    first_hit = None
-                    if sl_first:
-                        if l <= sl_px:
-                            first_hit = ('SL', sl_px)
-                        elif h >= tp_px:
-                            first_hit = ('TP', tp_px)
-                    else:
-                        if h >= tp_px:
-                            first_hit = ('TP', tp_px)
-                        elif l <= sl_px:
-                            first_hit = ('SL', sl_px)
-                    if first_hit:
-                        kind, exit_px = first_hit
-                        ret = (exit_px / tr.entry_price - 1.0) * tr.size
-                        pnl[d] += ret
-                        tr.open = False
-                        executed_trades.append({
-                            'Date_exit': d, 'RIC': ric, 'side': 'LONG',
-                            'entry_date': tr.entry_date, 'entry_px': tr.entry_price,
-                            'exit_px': exit_px, 'ret': ret, 'event': kind
-                        })
-                    else:
-                        new_list.append(tr)
-                else:  # short
-                    tp_px = tr.entry_price * (1 - tp)  # TP pro short => pokles
-                    sl_px = tr.entry_price * (1 + sl)
-                    first_hit = None
-                    if sl_first:
-                        if h >= sl_px:
-                            first_hit = ('SL', sl_px)
-                        elif l <= tp_px:
-                            first_hit = ('TP', tp_px)
-                    else:
-                        if l <= tp_px:
-                            first_hit = ('TP', tp_px)
-                        elif h >= sl_px:
-                            first_hit = ('SL', sl_px)
-                    if first_hit:
-                        kind, exit_px = first_hit
-                        ret = (1.0 - exit_px / tr.entry_price) * tr.size  # short zisk
-                        pnl[d] += ret
-                        tr.open = False
-                        executed_trades.append({
-                            'Date_exit': d, 'RIC': ric, 'side': 'SHORT',
-                            'entry_date': tr.entry_date, 'entry_px': tr.entry_price,
-                            'exit_px': exit_px, 'ret': ret, 'event': kind
-                        })
-                    else:
-                        new_list.append(tr)
-            open_trades[ric] = new_list
-
-        # 2) Vstupy (signály z t=d => vstup na t+1 open)
-        d_next = all_dates[i+1]
-        sig = daily_signals.get(d, None)
-        if sig:
-            # Longy
-            for ric in sig['longs']:
-                g = ric_groups.get(ric)
-                if g is None: 
+                idx = df_ric['Date'].searchsorted(d)
+                if idx >= len(df_ric) or df_ric.iloc[idx]['Date'] != d:
                     continue
-                if d_next not in g.index:
-                    continue
-                entry_px = g.at[d_next, 'OpenAdj']
-                open_trades[ric].append(Trade(ric=ric, side=+1, entry_date=d_next,
-                                              entry_price=entry_px, size=1.0))
-            # Shorty
-            for ric in sig['shorts']:
-                g = ric_groups.get(ric)
-                if g is None:
-                    continue
-                if d_next not in g.index:
-                    continue
-                entry_px = g.at[d_next, 'OpenAdj']
-                open_trades[ric].append(Trade(ric=ric, side=-1, entry_date=d_next,
-                                              entry_price=entry_px, size=1.0))
+                entry_row = df_ric.iloc[idx]
+                entry_price = float(entry_row['OpenAdj'])
+                pos = Position(ric=ric, direction=int(row['direction']), entry_date=d,
+                               entry_price=entry_price, tp=tp, sl=sl)
+                # první M2M bude vůči Close dne d (pro pozici otevřenou dnes), takže referenci nastavíme na Close dne d
+                pos.last_price = float(entry_row['CloseAdj'])
+                positions.append(pos)
 
-    # Daily PnL série
-    pnl_series = pd.Series(pnl).sort_index()
-    equity = pnl_series.cumsum()
+        # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi? V M2M portfoliu je počet pozic proměnný;
+        # použijeme equal-weighted průměr z dnešních příspěvků (pokud dnes není žádná pozice → 0).
+        if len(pnl_today) > 0:
+            daily_pnl_list.append((d, float(np.mean(pnl_today))))
+        else:
+            daily_pnl_list.append((d, 0.0))
 
-    # Sharpe (denní a annualizovaný; pokud je std=0, dá NaN)
-    sharpe_pd = pnl_series.mean() / (pnl_series.std(ddof=1) + 1e-12) if len(pnl_series) > 1 else np.nan
-    sharpe_pa = sharpe_pd * math.sqrt(252) if not np.isnan(sharpe_pd) else np.nan
+    pnl_series = pd.Series({d: v for d, v in daily_pnl_list}).sort_index()
+    return pnl_series
 
-    # Alfa vůči EW benchmarku (equal‑weighted SimpleReturn napříč dostupnými tickery)
-    bench = raw_df.groupby('Date')['SimpleReturn'].mean().sort_index()
-    # zarovnat na pnl_series index (realizace v dny výstupů)
-    df_alpha = pd.DataFrame({
-        'pnl': pnl_series
-    })
-    df_alpha['bench'] = bench.reindex(df_alpha.index).fillna(0.0)
-    Xreg = sm.add_constant(df_alpha['bench'].values)
-    model_ols = sm.OLS(df_alpha['pnl'].values, Xreg, missing='drop').fit()
-    alpha = model_ols.params[0]
-    alpha_t = model_ols.tvalues[0]
+def make_ohlc_map(df):
+    cols = ['Date','OpenAdj','HighAdj','LowAdj','CloseAdj']
+    ohlc_map = {}
+    for ric, g in df.groupby('RIC'):
+        gg = g[cols].dropna().sort_values('Date').reset_index(drop=True)
+        ohlc_map[ric] = gg
+    return ohlc_map
 
-    log(f"Simulation done: trades executed={len(executed_trades):,}, pnl days={len(pnl):,}")
-    return StrategyResult(
-        daily_pnl=pnl_series,
-        equity_curve=equity,
-        sharpe_pd=sharpe_pd,
-        sharpe_pa=sharpe_pa,
-        trades=executed_trades,
-        alpha=alpha,
-        alpha_tstat=alpha_t
-    )
+def sharpe_ratio(daily_returns, risk_free=0.0, periods_per_year=252):
+    ex = daily_returns - risk_free/periods_per_year
+    mu = ex.mean()
+    sd = ex.std(ddof=1)
+    if sd == 0 or np.isnan(sd):
+        return 0.0, 0.0
+    sr_pd = mu / sd
+    sr_pa = sr_pd * np.sqrt(periods_per_year)
+    return float(sr_pd), float(sr_pa)
 
-# -----------------------------
-# 7) MAIN PIPELINE
-# -----------------------------
-def main(hparams=HYPERPARAMS):
-    log("==== LSTM pipeline started ====")
-    # Load
-    df, vix = load_data(hparams['data']['data_path'], hparams['data']['vix_path'])
+def realized_alpha(strategy_ret, benchmark_ret):
+    # OLS: strategy = alpha + beta*benchmark + e
+    df = pd.concat([strategy_ret, benchmark_ret], axis=1, keys=['strategy','benchmark']).dropna()
+    if len(df) < 10:
+        return np.nan, np.nan, np.nan
+    X = sm.add_constant(df['benchmark'].values)
+    y = df['strategy'].values
+    model = sm.OLS(y, X).fit()
+    alpha = model.params[0]
+    beta = model.params[1]
+    # t-stat pro alpha
+    try:
+        alpha_t = model.tvalues[0]
+    except Exception:
+        alpha_t = np.nan
+    return float(alpha), float(beta), float(alpha_t)
 
-    # IDContIndex
-    df = add_id_cont_index(df)
-
-    # Build sequences
-    seq = build_sequences(df, vix, hparams)
-    log(f"Sequences built: X={seq.X.shape}, y={seq.y.shape}, unique dates={len(np.unique(seq.dates_t))}")
-
-    # Dev/Test split
-    sp = dev_test_split(seq.dates_t, hparams['data']['train_end_date'], hparams['data']['test_start_date'])
-    X_dev, y_dev, d_dev, ric_dev, idc_dev = seq.X[sp.dev_idx], seq.y[sp.dev_idx], seq.dates_t[sp.dev_idx], seq.ric[sp.dev_idx], seq.ids[sp.dev_idx]
-    X_test, y_test, d_test, ric_test, idc_test = seq.X[sp.test_idx], seq.y[sp.test_idx], seq.dates_t[sp.test_idx], seq.ric[sp.test_idx], seq.ids[sp.test_idx]
-
-    log(f"DEV: {X_dev.shape[0]} samples (<= {hparams['data']['train_end_date']})")
-    log(f"TEST: {X_test.shape[0]} samples (>= {hparams['data']['test_start_date']})")
-
-    # 3-fold CV (anti‑leakage scaling per fold)
-    cvres = cross_val_train(X_dev, y_dev, d_dev, hparams)
-    log(f"CV val losses: {cvres.val_losses} | mean={np.mean(cvres.val_losses):.6f}")
-
-    # Finální trén na celém DEV (nový scaler z celého DEV)
-    final_model, final_scaler = retrain_on_full_dev(X_dev, y_dev, hparams)
-
-    # Predikce DEV & TEST
-    pred_dev = predict_with_model(final_model, final_scaler, X_dev, y_dev, d_dev, ric_dev, idc_dev)
-    pred_tst = predict_with_model(final_model, final_scaler, X_test, y_test, d_test, ric_test, idc_test)
-
-    # R^2 / RMSE pro info
-    rmse_dev = math.sqrt(mean_squared_error(pred_dev.y_true, pred_dev.y_pred))
-    rmse_tst = math.sqrt(mean_squared_error(pred_tst.y_true, pred_tst.y_pred))
-    r2_dev = r2_score(pred_dev.y_true, pred_dev.y_pred)
-    r2_tst = r2_score(pred_tst.y_true, pred_tst.y_pred)
-    log(f"DEV: RMSE={rmse_dev:.6f}, R2={r2_dev:.4f}")
-    log(f"TEST: RMSE={rmse_tst:.6f}, R2={r2_tst:.4f}")
-
-    # Strategie s bariérami (na DEV i TEST zvlášť)
-    # DEV subset df
-    df_dev = df[df['Date'] <= pd.to_datetime(hparams['data']['train_end_date'])].copy()
-    df_tst = df[df['Date'] >= pd.to_datetime(hparams['data']['test_start_date'])].copy()
-
-    strat_dev = simulate_barrier_strategy(pred_dev, df_dev, hparams)
-    strat_tst = simulate_barrier_strategy(pred_tst, df_tst, hparams)
-
-    log("\n--- Strategy DEV ---")
-    log(f"Sharpe_pd={strat_dev.sharpe_pd:.3f}, Sharpe_pa={strat_dev.sharpe_pa:.3f}, alpha={strat_dev.alpha:.6f} (t={strat_dev.alpha_tstat:.2f})")
-    log(f"Trades executed: {len(strat_dev.trades)} | last equity={strat_dev.equity_curve.iloc[-1]:.4f}")
-
-    log("\n--- Strategy TEST ---")
-    log(f"Sharpe_pd={strat_tst.sharpe_pd:.3f}, Sharpe_pa={strat_tst.sharpe_pa:.3f}, alpha={strat_tst.alpha:.6f} (t={strat_tst.alpha_tstat:.2f})")
-    if len(strat_tst.equity_curve) > 0:
-        log(f"Trades executed: {len(strat_tst.trades)} | last equity={strat_tst.equity_curve.iloc[-1]:.4f}")
-
-    # --- Plot cumulative returns (PnL) over 2005–2023 and save as PNG ---
-    # Build a daily index across the whole data range
-    date_min = df['Date'].min().normalize()
-    date_max = df['Date'].max().normalize()
-    daily_index = pd.date_range(date_min, date_max, freq='D')
-
-    # Forward-fill equity curves on daily grid (DEV starts at 0)
-    dev_eq = strat_dev.equity_curve.reindex(daily_index).ffill().fillna(0.0)
-    tst_eq_raw = strat_tst.equity_curve.reindex(daily_index).ffill()
-
-    # Offset TEST equity so that it continues from the last DEV value
-    if not tst_eq_raw.dropna().empty:
-        first_valid = tst_eq_raw.dropna().index[0]
-        baseline = tst_eq_raw.loc[first_valid]
-        last_dev_val = dev_eq.loc[first_valid] if first_valid in dev_eq.index else dev_eq.iloc[-1]
-        tst_eq = last_dev_val + (tst_eq_raw - baseline)
-    else:
-        tst_eq = pd.Series(index=daily_index, dtype=float)
-
-    # Combine: DEV everywhere, then override with TEST (offset) once it starts
-    combined_eq = dev_eq.copy()
-    if not tst_eq.dropna().empty:
-        mask = tst_eq.notna()
-        combined_eq.loc[mask.index] = np.where(mask, tst_eq, combined_eq.loc[mask.index])
-
-    # Save PNG
-    plt.figure()
-    plt.plot(combined_eq.index, combined_eq.values, label='Cumulative PnL (DEV+TEST)')
-    plt.axvline(pd.to_datetime(hparams['data']['test_start_date']), linestyle='--', label='Test start')
-    plt.title('Cumulative returns (PnL) – 2005–2023')
-    plt.xlabel('Date')
-    plt.ylabel('Cumulative return')
+def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
+    plt.figure(figsize=(11,6))
+    plt.plot(strategy_cum.index, strategy_cum.values, label='Strategy (cum)')
+    plt.plot(benchmark_cum.index, benchmark_cum.values, label='Benchmark (cum)')
     plt.legend()
-    out_path = os.path.join(os.path.dirname(__file__), 'equity_2005_2023.png')
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    log(f"Saved equity curve to: {out_path}")
+    plt.title(title)
+    plt.xlabel('Date')
+    plt.ylabel('Cumulative Return')
+    plt.grid(True)
 
-    # Vrátíme artefakty pro případné další použití
-    artifacts = {
-        'final_model': final_model,
-        'final_scaler_mu': final_scaler.mu.tolist(),
-        'final_scaler_sd': final_scaler.sd.tolist(),
-        'metrics': {
-            'rmse_dev': rmse_dev, 'r2_dev': r2_dev,
-            'rmse_test': rmse_tst, 'r2_test': r2_tst,
-            'sharpe_pd_dev': strat_dev.sharpe_pd, 'sharpe_pa_dev': strat_dev.sharpe_pa,
-            'alpha_dev': strat_dev.alpha, 'alpha_t_dev': strat_dev.alpha_tstat,
-            'sharpe_pd_test': strat_tst.sharpe_pd, 'sharpe_pa_test': strat_tst.sharpe_pa,
-            'alpha_test': strat_tst.alpha, 'alpha_t_test': strat_tst.alpha_tstat
-        }
-    }
-    log("==== Pipeline finished ====")
-    return artifacts, (pred_dev, pred_tst), (strat_dev, strat_tst)
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception as e:
+            continue
+    plt.close()
+    return saved
+
+# =========================
+# ========= MAIN ==========
+# =========================
+
+def main():
+    t0 = time.time()
+    log("Startuji LSTM SP100 pipeline...")
+
+    # 1) Načtení dat + IDContIndex
+    df, vix = load_data()
+    df = compute_IDContIndex(df)
+
+    # 2) TA indikátory per IDContIndex
+    df = compute_ta_per_idcont(df)
+
+    # 3) Stavba subsekvencí a split
+    all_seqs, feat_names = build_all_sequences(df, vix)
+    dev, test = split_dev_test(all_seqs)
+
+    X_dev, y_dev, dates_dev, ids_dev, idcont_dev, meta_dev = stack_Xy(dev)
+    X_test, y_test, dates_test, ids_test, idcont_test, meta_test = stack_Xy(test)
+
+    log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names + ['VIX_CHG']}")
+
+    # 4) CV trénink (pro získání rozumné inicializace a sanity checku)
+    model_cv, mu_cv, sigma_cv = cv_train_lstm(X_dev, y_dev, dates_dev)
+
+    # 5) Finální trénink na celém developmentu
+    model, mu_final, sigma_final = final_train_lstm(X_dev, y_dev)
+
+    # 6) Predikce na dev i test
+    log("Predikuji na development a test setu...")
+    preds_dev = predict_with(model, X_dev, mu_final, sigma_final)
+    preds_test = predict_with(model, X_test, mu_final, sigma_final)
+
+    # 7) Sestavení DataFrame s predikcemi (pro strategii)
+    pred_dev_df = pd.DataFrame({
+        'date_t': dates_dev,
+        'RIC': meta_dev['RIC'],
+        'pred': preds_dev,
+        'OpenAdj_t1': meta_dev['OpenAdj_t1'],
+        'HighAdj_t1': meta_dev['HighAdj_t1'],
+        'LowAdj_t1': meta_dev['LowAdj_t1'],
+        'CloseAdj_t1': meta_dev['CloseAdj_t1'],
+        'y_true': y_dev
+    }).sort_values(['date_t','pred'], ascending=[True, False])
+
+    pred_test_df = pd.DataFrame({
+        'date_t': dates_test,
+        'RIC': meta_test['RIC'],
+        'pred': preds_test,
+        'OpenAdj_t1': meta_test['OpenAdj_t1'],
+        'HighAdj_t1': meta_test['HighAdj_t1'],
+        'LowAdj_t1': meta_test['LowAdj_t1'],
+        'CloseAdj_t1': meta_test['CloseAdj_t1'],
+        'y_true': y_test
+    }).sort_values(['date_t','pred'], ascending=[True, False])
+
+    # 8) OHLC map pro strategii a benchmark
+    ohlc_map = make_ohlc_map(df)
+    benchmark = compute_benchmark(df)  # denní benchmark přes celé období
+
+    # 9) Strategie (M2M, bariéry) — zvlášť na development a test (použijeme odpovídající podmnožinu kalendáře)
+    # Development signálové dny:
+    dev_dates_ordered = np.unique(pred_dev_df['date_t'])
+    test_dates_ordered = np.unique(pred_test_df['date_t'])
+
+    strat_cfg = HYPERPARAMS['strategy']
+    # Development
+    pnl_dev = run_strategy(
+        pred_dev_df, ohlc_map, dev_dates_ordered,
+        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority']
+    )
+    # Test
+    pnl_test = run_strategy(
+        pred_test_df, ohlc_map, test_dates_ordered,
+        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority']
+    )
+
+    # 10) Vyhodnocení (Sharpe)
+    sr_pd_dev, sr_pa_dev = sharpe_ratio(pnl_dev)
+    sr_pd_test, sr_pa_test = sharpe_ratio(pnl_test)
+
+    log(f"Sharpe_pd (dev) = {sr_pd_dev:.4f}, Sharpe_pa (dev) = {sr_pa_dev:.4f}")
+    log(f"Sharpe_pd (test) = {sr_pd_test:.4f}, Sharpe_pa (test) = {sr_pa_test:.4f}")
+
+    # 11) Realizovaná alfa (na test sample)
+    # Sladíme benchmark s horizontem pnl_test (jejich průnik indexů)
+    bench_test = benchmark.reindex(pnl_test.index).fillna(0.0)
+    alpha, beta, alpha_t = realized_alpha(pnl_test, bench_test)
+    log(f"Realizovaná alfa na testu: alpha={alpha:.6f} (t={alpha_t:.2f}), beta={beta:.4f}")
+
+    # 12) Kumulativní výnosy a graf
+    strat_cum_dev = (1 + pnl_dev).cumprod() - 1.0
+    strat_cum_test = (1 + pnl_test).cumprod() - 1.0
+    bench_cum = (1 + benchmark).cumprod() - 1.0
+
+    # spojíme strategii dev+test pro souvislý graf strategie; benchmark je přes celé období
+    strat_cum = pd.concat([strat_cum_dev, strat_cum_test[~strat_cum_test.index.isin(strat_cum_dev.index)]], axis=0).sort_index()
+
+    saved_png = plot_and_save(
+        strategy_cum=strat_cum,
+        benchmark_cum=bench_cum.reindex(strat_cum.index).fillna(method='ffill').fillna(0.0),
+        title="LSTM Strategy vs. Benchmark (Cumulative Returns)",
+        out_paths=HYPERPARAMS['output']['png_paths']
+    )
+    if saved_png:
+        log(f"Uloženo PNG: {saved_png}")
+    else:
+        log("Nepodařilo se uložit PNG (zkontroluj cesty v HYPERPARAMS['output']['png_paths']).")
+
+    # 13) Finální summary
+    t1 = time.time()
+    elapsed = t1 - t0
+    log("====== SUMMARY ======")
+    log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
+    log(f"Sharpe_dev pd={sr_pd_dev:.4f}, pa={sr_pa_dev:.4f}")
+    log(f"Sharpe_test pd={sr_pd_test:.4f}, pa={sr_pa_test:.4f}")
+    log(f"Alpha_test={alpha:.6f} (t={alpha_t:.2f}), Beta_test={beta:.4f}")
+    log(f"Doba běhu: {elapsed/60:.2f} min")
 
 if __name__ == "__main__":
-    artifacts, preds, strategies = main(HYPERPARAMS)
+    try:
+        main()
+    except Exception as e:
+        log(f"Chyba: {repr(e)}")
+        raise
