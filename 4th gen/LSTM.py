@@ -617,9 +617,10 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
 
     # Mapa: pro každý den vybereme z pred_df nové vstupy, které mají signál včerejška (protože vstup je dnes)
     pred_by_signal = pred_df.groupby('date_t')
-    # Seznam dostupných signálních dnů (seřazený) a sada již zpracovaných signálů
+    # Seznam dostupných signálních dnů (seřazený)
     signal_dates = pd.DatetimeIndex(list(pred_by_signal.groups.keys())).sort_values()
-    opened_signal_dates = set()
+    # Sledujeme, které (sig_day, instrument) už byly otevřeny
+    opened_signal_pairs = set()
 
     daily_pnl_list = []
     for d in all_dates:
@@ -627,13 +628,11 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
         if len(daily_pnl_list) % heartbeat_every == 0 and len(daily_pnl_list) > 0:
             log(f"  ...simulace {phase or ''}: zpracováno {len(daily_pnl_list)} dní")
 
-        # 2) Otevři nové pozice podle všech signálních dnů ≤ (d-1), které ještě nebyly otevřeny
+        # 2) Otevři nové pozice podle signálů, jejichž plánovaný entry den je právě dnes
         yesterday = d - timedelta(days=1)
         eligible = signal_dates[signal_dates <= yesterday]
-        # Najdi všechny signální dny, které ještě nebyly otevřeny
-        new_signal_days = [sd for sd in eligible if sd not in opened_signal_dates]
-        # Iteruj chronologicky
-        for sig_day in sorted(new_signal_days):
+        # Pro KAŽDÝ vhodný signální den zkontrolujeme plánovaný entry day per instrument
+        for sig_day in eligible:
             day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
             entries = pd.concat([
                 day_preds.head(top_n).assign(direction=+1),
@@ -641,23 +640,30 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
             ], axis=0)
             for _, row in entries.iterrows():
                 idc = row['IDContIndex']
+                key = (sig_day, idc)
+                if key in opened_signal_pairs:
+                    continue
                 if idc not in ric_dates:
                     continue
                 dates_arr = ric_dates[idc]
-                # první obchodní den instrumentu na/po d
-                ins = dates_arr.searchsorted(d)
+                # PLÁNOVANÝ entry den = první obchodní den ≥ (sig_day + 1 den)
+                target_day = sig_day + timedelta(days=1)
+                ins = dates_arr.searchsorted(target_day)
                 if ins >= len(dates_arr):
+                    continue  # instrument už dále neobchoduje
+                planned_entry_day = dates_arr[ins]
+                # Otevři POUZE pokud právě dnes nastal plánovaný vstup
+                if planned_entry_day != d:
                     continue
-                idx = int(ins)
-                o, h, l, c = ric_ohlc_np[idc][idx]
-                entry_date_eff = dates_arr[idx]
+                # Otevření pozice na open plánovaného dne
+                o, h, l, c = ric_ohlc_np[idc][ins]
+                entry_date_eff = planned_entry_day
                 entry_price = float(o)
                 pos = Position(ric=idc, direction=int(row['direction']), entry_date=entry_date_eff,
                                entry_price=entry_price, tp=tp, sl=sl)
-                # M2M za vstupní den: používej Open jako referenci
-                pos.last_price = entry_price
+                pos.last_price = entry_price  # referenční cena pro první M2M
                 positions.append(pos)
-            opened_signal_dates.add(sig_day)
+                opened_signal_pairs.add(key)
 
         pnl_today = []
 
@@ -835,8 +841,13 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     ax1.plot(bench_cum.index, bench_cum.values, label='Benchmark (cum)')
     if hedged_cum_full is not None:
         ax1.plot(hedged_cum_full.index, hedged_cum_full.values, label='Hedged (cum)')
-    # vertical line at test start
-    ax1.axvline(pd.to_datetime(test_start_date), linestyle='--')
+    # vertical line at test start with annotation
+    ts = pd.to_datetime(test_start_date)
+    ax1.axvline(ts, linestyle='--')
+    # popisek vertikální čáry
+    ylim = ax1.get_ylim()
+    ax1.annotate(f"Test start ({ts.date()})", xy=(ts, ylim[1]), xytext=(5, -10),
+                 textcoords='offset points', rotation=90, va='top', ha='left', fontsize=8, color='gray')
     ax1.legend()
     ax1.set_title("LSTM Strategy vs. Benchmark (Cumulative Returns)")
     ax1.set_xlabel("Date")
@@ -845,14 +856,9 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
 
     # 2) Test-only panel
     ax2 = fig.add_subplot(gs[1, 0])
-    # Rebase benchmark cumulative return to 0 at test_start_date
-    if len(bench_cum_test) > 0:
-        bench_cum_test_rebased = (1.0 + (bench_cum_test - bench_cum_test.iloc[0])).cumprod() - 1.0
-    else:
-        bench_cum_test_rebased = bench_cum_test
-    # Use the test period on x-axis
+    # Vstupem je již kumulativní křivka od startu testu, začínající na 0
     ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy (test, rebased to 0)')
-    ax2.plot(bench_cum_test.index, bench_cum_test_rebased.values, label='Benchmark (test, rebased to 0)')
+    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark (test, rebased to 0)')
     if hedged_cum_test is not None:
         ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged (test, rebased to 0)')
     ax2.set_title("Test Period (Strategy rebased to 0)")
@@ -1042,8 +1048,9 @@ def main():
     bench_cum = (1 + benchmark).cumprod() - 1.0
 
     # Build test-only panel inputs
-    test_mask = bench_cum.index >= pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
-    bench_cum_test = bench_cum[test_mask]
+    test_start_dt = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    bench_test = benchmark[benchmark.index >= test_start_dt]
+    bench_cum_test = (1.0 + bench_test).cumprod() - 1.0
 
     # doplň hedged_cum_full z dostupného indexu
     hedged_cum_full = pd.Series(index=strat_cum_full.index, dtype=float)
