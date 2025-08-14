@@ -76,11 +76,11 @@ HYPERPARAMS = {
         'optimizer': 'adam',
         'loss': 'mse',
         'batch_size': 64,
-        'CV_epochs': 100,          # kratší trénink pro CV
-        'final_epochs': 100,      # finální trénink na celém developmentu
-        'early_stopping_patience': 10,
+        'CV_epochs': 2,          # kratší trénink pro CV
+        'final_epochs': 2,      # finální trénink na celém developmentu
+        'early_stopping_patience': 1,
         'seed': 42,
-        'k_folds': 3,
+        'k_folds': 2,
         'keras_verbose': 1
     },
     'strategy': {
@@ -627,37 +627,37 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
         if len(daily_pnl_list) % heartbeat_every == 0 and len(daily_pnl_list) > 0:
             log(f"  ...simulace {phase or ''}: zpracováno {len(daily_pnl_list)} dní")
 
-        # 2) Otevři nové pozice podle posledního dostupného signálu ≤ (d-1)
-        #    aby pondělní trh otevřel páteční signál apod.; zároveň otevři každý signální den jen jednou
+        # 2) Otevři nové pozice podle všech signálních dnů ≤ (d-1), které ještě nebyly otevřeny
         yesterday = d - timedelta(days=1)
         eligible = signal_dates[signal_dates <= yesterday]
-        if len(eligible) > 0:
-            sig_day = eligible[-1]
-            if sig_day not in opened_signal_dates:
-                day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
-                entries = pd.concat([
-                    day_preds.head(top_n).assign(direction=+1),
-                    day_preds.tail(bottom_n).assign(direction=-1)
-                ], axis=0)
-                for _, row in entries.iterrows():
-                    idc = row['IDContIndex']
-                    if idc not in ric_dates:
-                        continue
-                    dates_arr = ric_dates[idc]
-                    # první obchodní den instrumentu na/po d
-                    ins = dates_arr.searchsorted(d)
-                    if ins >= len(dates_arr):
-                        continue
-                    idx = int(ins)
-                    o, h, l, c = ric_ohlc_np[idc][idx]
-                    entry_date_eff = dates_arr[idx]
-                    entry_price = float(o)
-                    pos = Position(ric=idc, direction=int(row['direction']), entry_date=entry_date_eff,
-                                   entry_price=entry_price, tp=tp, sl=sl)
-                    # M2M za vstupní den: používej Open jako referenci
-                    pos.last_price = entry_price
-                    positions.append(pos)
-                opened_signal_dates.add(sig_day)
+        # Najdi všechny signální dny, které ještě nebyly otevřeny
+        new_signal_days = [sd for sd in eligible if sd not in opened_signal_dates]
+        # Iteruj chronologicky
+        for sig_day in sorted(new_signal_days):
+            day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
+            entries = pd.concat([
+                day_preds.head(top_n).assign(direction=+1),
+                day_preds.tail(bottom_n).assign(direction=-1)
+            ], axis=0)
+            for _, row in entries.iterrows():
+                idc = row['IDContIndex']
+                if idc not in ric_dates:
+                    continue
+                dates_arr = ric_dates[idc]
+                # první obchodní den instrumentu na/po d
+                ins = dates_arr.searchsorted(d)
+                if ins >= len(dates_arr):
+                    continue
+                idx = int(ins)
+                o, h, l, c = ric_ohlc_np[idc][idx]
+                entry_date_eff = dates_arr[idx]
+                entry_price = float(o)
+                pos = Position(ric=idc, direction=int(row['direction']), entry_date=entry_date_eff,
+                               entry_price=entry_price, tp=tp, sl=sl)
+                # M2M za vstupní den: používej Open jako referenci
+                pos.last_price = entry_price
+                positions.append(pos)
+            opened_signal_dates.add(sig_day)
 
         pnl_today = []
 
@@ -845,9 +845,14 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
 
     # 2) Test-only panel
     ax2 = fig.add_subplot(gs[1, 0])
+    # Rebase benchmark cumulative return to 0 at test_start_date
+    if len(bench_cum_test) > 0:
+        bench_cum_test_rebased = (1.0 + (bench_cum_test - bench_cum_test.iloc[0])).cumprod() - 1.0
+    else:
+        bench_cum_test_rebased = bench_cum_test
     # Use the test period on x-axis
     ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy (test, rebased to 0)')
-    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark (cum)')
+    ax2.plot(bench_cum_test.index, bench_cum_test_rebased.values, label='Benchmark (test, rebased to 0)')
     if hedged_cum_test is not None:
         ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged (test, rebased to 0)')
     ax2.set_title("Test Period (Strategy rebased to 0)")
