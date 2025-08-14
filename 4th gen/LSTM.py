@@ -76,11 +76,11 @@ HYPERPARAMS = {
         'optimizer': 'adam',
         'loss': 'mse',
         'batch_size': 64,
-        'CV_epochs': 100,          # kratší trénink pro CV
-        'final_epochs': 100,      # finální trénink na celém developmentu
+        'CV_epochs': 2,          # kratší trénink pro CV
+        'final_epochs': 2,      # finální trénink na celém developmentu
         'early_stopping_patience': 1,
         'seed': 42,
-        'k_folds': 3,
+        'k_folds': 2,
         'keras_verbose': 1
     },
     'strategy': {
@@ -94,7 +94,7 @@ HYPERPARAMS = {
     'output': {
         'png_paths': [
             "/Users/lindawaisova/Desktop/DP/4th generation/LSTM_dashboard.png",
-            r"C:\Users\david\Desktop\DP\LSTM_dashboard.png",
+            r"C:\Users\david\Desktop\4th generation\LSTM_dashboard.png",
             os.path.join(os.getcwd(), "LSTM_dashboard.png"),
         ]
     }
@@ -418,6 +418,7 @@ def cv_train_lstm(X_dev, y_dev, dates_dev):
     folds = np.array_split(np.arange(N), k_folds)
     val_losses = []
     models_trained = []
+    histories = []
 
     for fold_idx in range(k_folds):
         val_idx = folds[fold_idx]
@@ -441,6 +442,7 @@ def cv_train_lstm(X_dev, y_dev, dates_dev):
             verbose=HYPERPARAMS['model'].get('keras_verbose', 1),
             callbacks=[es]
         )
+        histories.append(hist.history)
         best_val = min(hist.history['val_loss'])
         val_losses.append(best_val)
         models_trained.append((model, mu, sigma))
@@ -449,7 +451,8 @@ def cv_train_lstm(X_dev, y_dev, dates_dev):
     best_fold = int(np.argmin(val_losses))
     log(f"CV hotovo. Val loss per fold: {[round(v,6) for v in val_losses]} → vybírám fold {best_fold+1}")
     best_model, best_mu, best_sigma = models_trained[best_fold]
-    return best_model, best_mu, best_sigma
+    best_history = histories[best_fold]
+    return best_model, best_mu, best_sigma, histories, best_history
 
 def final_train_lstm(X_dev, y_dev):
     """ Finální trénink na celém developmentu; mu/sigma z celého developmentu. """
@@ -469,7 +472,7 @@ def final_train_lstm(X_dev, y_dev):
         callbacks=[es]
     )
     log(f"Finální trénink hotov. Nejlepší val_loss={min(hist.history['val_loss']):.6f}")
-    return model, mu, sigma
+    return model, mu, sigma, hist.history
 
 def predict_with(model, X, mu, sigma):
     Xn = standardize_with(X, mu, sigma)
@@ -765,6 +768,73 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     return saved
 
 # =========================
+# ======= DASHBOARD =======
+# =========================
+from matplotlib.gridspec import GridSpec
+
+def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_cum_test, cv_best_hist, final_hist, out_paths):
+    fig = plt.figure(figsize=(12, 10))
+    gs = GridSpec(4, 1, height_ratios=[3.0, 1.6, 1.3, 1.3], hspace=0.35)
+
+    # 1) Full period cumulative returns
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(strat_cum.index, strat_cum.values, label='Strategy (cum)')
+    ax1.plot(bench_cum.index, bench_cum.values, label='Benchmark (cum)')
+    # vertical line at test start
+    ax1.axvline(pd.to_datetime(test_start_date), linestyle='--')
+    ax1.legend()
+    ax1.set_title("LSTM Strategy vs. Benchmark (Cumulative Returns)")
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Cumulative Return")
+    ax1.grid(True)
+
+    # 2) Test-only panel
+    ax2 = fig.add_subplot(gs[1, 0])
+    # Use the test period on x-axis
+    ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy (test, rebased to 0)')
+    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark (cum)')
+    ax2.set_title("Test Period (Strategy rebased to 0)")
+    ax2.set_xlabel("Date")
+    ax2.set_ylabel("Cum Return")
+    ax2.grid(True)
+    ax2.legend()
+
+    # 3) Learning curve – best CV fold
+    ax3 = fig.add_subplot(gs[2, 0])
+    if cv_best_hist is not None and 'loss' in cv_best_hist and 'val_loss' in cv_best_hist:
+        ax3.plot(range(1, len(cv_best_hist['loss'])+1), cv_best_hist['loss'], label='Train loss')
+        ax3.plot(range(1, len(cv_best_hist['val_loss'])+1), cv_best_hist['val_loss'], label='Val loss')
+    ax3.set_title("Learning Curve – Best CV Fold")
+    ax3.set_xlabel("Epoch")
+    ax3.set_ylabel("Loss")
+    ax3.grid(True)
+    ax3.legend()
+
+    # 4) Learning curve – final training
+    ax4 = fig.add_subplot(gs[3, 0])
+    if final_hist is not None and 'loss' in final_hist and ('val_loss' in final_hist or 'val_loss' in final_hist):
+        ax4.plot(range(1, len(final_hist['loss'])+1), final_hist['loss'], label='Train loss')
+        if 'val_loss' in final_hist:
+            ax4.plot(range(1, len(final_hist['val_loss'])+1), final_hist['val_loss'], label='Val loss')
+    ax4.set_title("Learning Curve – Final Training")
+    ax4.set_xlabel("Epoch")
+    ax4.set_ylabel("Loss")
+    ax4.grid(True)
+    ax4.legend()
+
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            fig.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close(fig)
+    return saved
+
+# =========================
 # ========= MAIN ==========
 # =========================
 
@@ -789,10 +859,10 @@ def main():
     log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names + ['VIX_CHG']}")
 
     # 4) CV trénink (pro získání rozumné inicializace a sanity checku)
-    model_cv, mu_cv, sigma_cv = cv_train_lstm(X_dev, y_dev, dates_dev)
+    model_cv, mu_cv, sigma_cv, cv_histories, cv_best_hist = cv_train_lstm(X_dev, y_dev, dates_dev)
 
     # 5) Finální trénink na celém developmentu
-    model, mu_final, sigma_final = final_train_lstm(X_dev, y_dev)
+    model, mu_final, sigma_final, final_hist = final_train_lstm(X_dev, y_dev)
 
     # 6) Predikce na dev i test
     log("Predikuji na development a test setu...")
@@ -865,13 +935,26 @@ def main():
     strat_cum_test = (1 + pnl_test).cumprod() - 1.0
     bench_cum = (1 + benchmark).cumprod() - 1.0
 
-    # spojíme strategii dev+test pro souvislý graf strategie; benchmark je přes celé období
-    strat_cum = pd.concat([strat_cum_dev, strat_cum_test[~strat_cum_test.index.isin(strat_cum_dev.index)]], axis=0).sort_index()
+    # make test cumulative continue from the end of dev
+    if len(strat_cum_dev) > 0 and len(strat_cum_test) > 0:
+        offset = (1.0 + strat_cum_dev.iloc[-1])
+        strat_cum_test_shifted = (1.0 + strat_cum_test) * float(offset) - 1.0
+    else:
+        strat_cum_test_shifted = strat_cum_test
+    strat_cum_continuous = pd.concat([strat_cum_dev, strat_cum_test_shifted[~strat_cum_test_shifted.index.isin(strat_cum_dev.index)]], axis=0).sort_index()
 
-    saved_png = plot_and_save(
-        strategy_cum=strat_cum,
-        benchmark_cum=bench_cum.reindex(strat_cum.index).fillna(method='ffill').fillna(0.0),
-        title="LSTM Strategy vs. Benchmark (Cumulative Returns)",
+    # Build test-only panel inputs
+    test_mask = bench_cum.index >= pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    bench_cum_test = bench_cum[test_mask]
+
+    saved_png = plot_dashboard(
+        strat_cum=strat_cum_continuous,
+        bench_cum=bench_cum,
+        test_start_date=HYPERPARAMS['data']['test_start_date'],
+        strat_cum_test=strat_cum_test,
+        bench_cum_test=bench_cum_test,
+        cv_best_hist=cv_best_hist,
+        final_hist=final_hist,
         out_paths=HYPERPARAMS['output']['png_paths']
     )
     if saved_png:
