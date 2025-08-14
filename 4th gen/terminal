@@ -1,0 +1,60 @@
+[2025-08-14 15:16:11] Počítám benchmark (equal-weighted průměr SimpleReturn napříč tickery)...
+[2025-08-14 15:16:11] Simuluji obchodní strategii (dev) s M2M přeceňováním a bariérami ±2 %...
+[2025-08-14 15:16:25]   ...simulace dev: zpracováno 250 dní
+[2025-08-14 15:16:27]   ...simulace dev: zpracováno 500 dní
+[2025-08-14 15:16:28]   ...simulace dev: zpracováno 750 dní
+[2025-08-14 15:16:29]   ...simulace dev: zpracováno 1000 dní
+[2025-08-14 15:16:30]   ...simulace dev: zpracováno 1250 dní
+[2025-08-14 15:16:31]   ...simulace dev: zpracováno 1500 dní
+[2025-08-14 15:16:32]   ...simulace dev: zpracováno 1750 dní
+[2025-08-14 15:16:33]   ...simulace dev: zpracováno 2000 dní
+[2025-08-14 15:16:33]   ...simulace dev: zpracováno 2250 dní
+[2025-08-14 15:16:34]   ...simulace dev: zpracováno 2500 dní
+[2025-08-14 15:16:34]   ...simulace dev: zpracováno 2750 dní
+[2025-08-14 15:16:35]   ...simulace dev: zpracováno 3000 dní
+[2025-08-14 15:16:35]   ...simulace dev: zpracováno 3250 dní
+[2025-08-14 15:16:36]   ...simulace dev: zpracováno 3500 dní
+[2025-08-14 15:16:36]   ...simulace dev: zpracováno 3750 dní
+[2025-08-14 15:16:37]   ...simulace dev: zpracováno 4000 dní
+[2025-08-14 15:16:37]   ...simulace dev: zpracováno 4250 dní
+[2025-08-14 15:16:37]   ...simulace dev: zpracováno 4500 dní
+[2025-08-14 15:16:37]   ...simulace dev: zpracováno 4750 dní
+[2025-08-14 15:16:37] Simuluji obchodní strategii (test) s M2M přeceňováním a bariérami ±2 %...
+[2025-08-14 15:16:40]   ...simulace test: zpracováno 250 dní
+[2025-08-14 15:16:40]   ...simulace test: zpracováno 500 dní
+[2025-08-14 15:16:41]   ...simulace test: zpracováno 750 dní
+[2025-08-14 15:16:41] Sharpe_pd (dev) = 0.1274, Sharpe_pa (dev) = 2.0226
+[2025-08-14 15:16:41] Sharpe_pd (test) = -0.0157, Sharpe_pa (test) = -0.2486
+[2025-08-14 15:16:41] Regresní metriky (Train/Test)
+[2025-08-14 15:16:41]   mse     0.000228 | 0.000364
+[2025-08-14 15:16:41]   mae     0.009986 | 0.013095
+[2025-08-14 15:16:41]   rmse    0.015098 | 0.019073
+[2025-08-14 15:16:41]   r2      0.438622 | -0.116899
+[2025-08-14 15:16:41] Výnosové metriky (Train/Test)
+[2025-08-14 15:16:41]   cum       6.6396 | -0.0503
+[2025-08-14 15:16:41]   ann       0.1051 | -0.0149
+[2025-08-14 15:16:41]   sharpe    0.1274 | -0.0157
+[2025-08-14 15:16:41]   maxdd     -0.0927 | -0.1735
+[2025-08-14 15:16:41]   vola_ann  0.0520 | 0.0599
+[2025-08-14 15:16:41] Metriky obchodů (Train/Test)
+[2025-08-14 15:16:41]   win_rate         0.5033 | 0.5000
+[2025-08-14 15:16:41]   profit_factor    1.0340 | 1.0203
+[2025-08-14 15:16:41]   avg_holding_days -1286.79 | -293.84
+[2025-08-14 15:16:41]   pt_hit_pct       0.5033 | 0.5000
+[2025-08-14 15:16:41]   sl_hit_pct       0.4967 | 0.5000
+[2025-08-14 15:16:41] Realizovaná alfa/beta (Test)
+[2025-08-14 15:16:41]   alpha_daily -0.00006564
+[2025-08-14 15:16:41]   alpha_t     -0.49   alpha_p 0.6273
+[2025-08-14 15:16:41]   beta        0.0141
+[2025-08-14 15:16:41]   beta_t      1.05   beta_p  0.2944
+[2025-08-14 15:16:41]   r2          0.0014
+[2025-08-14 15:16:41] Hedged Sharpe (test): pd=-0.0174, pa=-0.2765
+[2025-08-14 15:16:42] Uloženo PNG: C:\Users\david\Desktop\4th generation\LSTM_dashboard.png
+[2025-08-14 15:16:42] ====== SUMMARY ======
+[2025-08-14 15:16:42] Vzorky: dev=417,380, test=78,684, okno h=15, kanály=10
+[2025-08-14 15:16:42] Sharpe_dev pd=0.1274, pa=2.0226
+[2025-08-14 15:16:42] Sharpe_test pd=-0.0157, pa=-0.2486
+[2025-08-14 15:16:42] Alpha_test=-0.000066 (t=-0.49, p=0.6273), Beta_test=0.0141 (t=1.05, p=0.2944), R2=0.0014
+[2025-08-14 15:16:42] Doba běhu: 44.75 min
+
+(venv) C:\Users\david\Desktop\4th generation>
