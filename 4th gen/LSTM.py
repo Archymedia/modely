@@ -499,6 +499,7 @@ class Position:
         self.last_price = entry_price  # pro M2M referenci (Close předchozího dne)
         self.exit_date = None
         self.exit_price = None
+        self.exit_reason = None  # 'TP' or 'SL'
 
     def check_barriers(self, date, high, low, close, priority='SL_first'):
         """ Kontrola zásahu bariér v 'date'.
@@ -527,8 +528,10 @@ class Position:
             if priority == 'SL_first':
                 # konzervativně nejdřív SL
                 exit_price = sl_price
+                self.exit_reason = 'SL'
             else:
                 exit_price = tp_price
+                self.exit_reason = 'TP'
             self.exit_date = date
             self.exit_price = exit_price
             self.is_open = False
@@ -542,6 +545,7 @@ class Position:
 
         elif hit_sl:
             exit_price = sl_price
+            self.exit_reason = 'SL'
             self.exit_date = date
             self.exit_price = exit_price
             self.is_open = False
@@ -553,6 +557,7 @@ class Position:
 
         elif hit_tp:
             exit_price = tp_price
+            self.exit_reason = 'TP'
             self.exit_date = date
             self.exit_price = exit_price
             self.is_open = False
@@ -607,6 +612,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
     heartbeat_every = 250  # malé heartbeat logování
 
     positions = []  # otevřené pozice
+    trades = []  # uzavřené obchody pro metriky
     daily_pnl = {}
     # Přes den t (signál v t → vstup na t+1 OpenAdj)
     for t in dates_ordered:
@@ -675,6 +681,18 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
 
         # odstraň uzavřené (od konce, aby se indexy neposunuly)
         for i in reversed(to_remove):
+            pos = positions[i]
+            trades.append({
+                'RIC': pos.ric,
+                'direction': pos.direction,
+                'entry_date': pos.entry_date,
+                'exit_date': pos.exit_date,
+                'holding_days': int((pos.exit_date - pos.entry_date).days) if (pos.exit_date is not None and pos.entry_date is not None) else None,
+                'entry_price': float(pos.entry_price),
+                'exit_price': float(pos.exit_price) if pos.exit_price is not None else None,
+                'pnl': float((pos.exit_price / pos.entry_price) - 1.0) if (pos.exit_price is not None and pos.direction == +1) else float((pos.entry_price / pos.exit_price) - 1.0) if (pos.exit_price is not None and pos.direction == -1) else None,
+                'exit_reason': pos.exit_reason
+            })
             positions.pop(i)
 
         # 2) Poté založ nové pozice z dne d-1 (signál včera → vstup dnes na Open)
@@ -708,7 +726,8 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
             daily_pnl_list.append((d, 0.0))
 
     pnl_series = pd.Series({d: v for d, v in daily_pnl_list}).sort_index()
-    return pnl_series
+    trades_df = pd.DataFrame(trades)
+    return pnl_series, trades_df
 
 def make_ohlc_map(df):
     cols = ['Date','OpenAdj','HighAdj','LowAdj','CloseAdj']
@@ -728,22 +747,78 @@ def sharpe_ratio(daily_returns, risk_free=0.0, periods_per_year=252):
     sr_pa = sr_pd * np.sqrt(periods_per_year)
     return float(sr_pd), float(sr_pa)
 
+# ---- Utility metric functions ----
+def cumulative_return(daily_returns):
+    if len(daily_returns) == 0:
+        return 0.0
+    return float((1.0 + daily_returns).prod() - 1.0)
+
+def annualized_return(daily_returns, periods_per_year=252):
+    if len(daily_returns) == 0:
+        return 0.0
+    avg = daily_returns.mean()
+    return float(avg * periods_per_year)
+
+def annual_volatility(daily_returns, periods_per_year=252):
+    sd = daily_returns.std(ddof=1)
+    return float(sd * np.sqrt(periods_per_year)) if not np.isnan(sd) else 0.0
+
+def max_drawdown(daily_returns):
+    if len(daily_returns) == 0:
+        return 0.0
+    equity = (1.0 + daily_returns).cumprod()
+    peak = equity.cummax()
+    dd = equity / peak - 1.0
+    return float(dd.min())
+
+def regression_metrics(y_true, y_pred):
+    mse = float(mean_squared_error(y_true, y_pred))
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+    rmse = float(np.sqrt(mse))
+    # R^2
+    ss_res = float(np.sum((y_true - y_pred)**2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true))**2))
+    r2 = float(1 - ss_res/ss_tot) if ss_tot != 0 else 0.0
+    return mse, mae, rmse, r2
+
+def trade_metrics_from_trades(trades_df: pd.DataFrame):
+    if trades_df is None or trades_df.empty:
+        return {
+            'win_rate': np.nan, 'profit_factor': np.nan, 'avg_holding_days': np.nan,
+            'pt_hit_pct': np.nan, 'sl_hit_pct': np.nan
+        }
+    pnl = trades_df['pnl'].dropna()
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0]
+    win_rate = float((pnl > 0).mean()) if len(pnl) > 0 else np.nan
+    profit_factor = float(wins.sum() / abs(losses.sum())) if len(losses) > 0 else np.inf
+    avg_hold = float(trades_df['holding_days'].dropna().mean()) if 'holding_days' in trades_df else np.nan
+    pt_hit = float((trades_df['exit_reason'] == 'TP').mean()) if 'exit_reason' in trades_df else np.nan
+    sl_hit = float((trades_df['exit_reason'] == 'SL').mean()) if 'exit_reason' in trades_df else np.nan
+    return {
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'avg_holding_days': avg_hold,
+        'pt_hit_pct': pt_hit,
+        'sl_hit_pct': sl_hit
+    }
+
 def realized_alpha(strategy_ret, benchmark_ret):
     # OLS: strategy = alpha + beta*benchmark + e
     df = pd.concat([strategy_ret, benchmark_ret], axis=1, keys=['strategy','benchmark']).dropna()
     if len(df) < 10:
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
     X = sm.add_constant(df['benchmark'].values)
     y = df['strategy'].values
     model = sm.OLS(y, X).fit()
-    alpha = model.params[0]
-    beta = model.params[1]
-    # t-stat pro alpha
-    try:
-        alpha_t = model.tvalues[0]
-    except Exception:
-        alpha_t = np.nan
-    return float(alpha), float(beta), float(alpha_t)
+    alpha = float(model.params[0])
+    beta = float(model.params[1])
+    alpha_t = float(model.tvalues[0])
+    beta_t  = float(model.tvalues[1])
+    alpha_p = float(model.pvalues[0])
+    beta_p  = float(model.pvalues[1])
+    r2 = float(model.rsquared)
+    return alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2
 
 def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     plt.figure(figsize=(11,6))
@@ -772,14 +847,16 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
 # =========================
 from matplotlib.gridspec import GridSpec
 
-def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_cum_test, cv_best_hist, final_hist, out_paths):
+def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_cum_test, final_hist, out_paths, hedged_cum_full=None, hedged_cum_test=None):
     fig = plt.figure(figsize=(12, 10))
-    gs = GridSpec(4, 1, height_ratios=[3.0, 1.6, 1.3, 1.3], hspace=0.35)
+    gs = GridSpec(3, 1, height_ratios=[3.0, 1.8, 1.6], hspace=0.35)
 
     # 1) Full period cumulative returns
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.plot(strat_cum.index, strat_cum.values, label='Strategy (cum)')
     ax1.plot(bench_cum.index, bench_cum.values, label='Benchmark (cum)')
+    if hedged_cum_full is not None:
+        ax1.plot(hedged_cum_full.index, hedged_cum_full.values, label='Hedged (cum)')
     # vertical line at test start
     ax1.axvline(pd.to_datetime(test_start_date), linestyle='--')
     ax1.legend()
@@ -793,34 +870,25 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     # Use the test period on x-axis
     ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy (test, rebased to 0)')
     ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark (cum)')
+    if hedged_cum_test is not None:
+        ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged (test, rebased to 0)')
     ax2.set_title("Test Period (Strategy rebased to 0)")
     ax2.set_xlabel("Date")
     ax2.set_ylabel("Cum Return")
     ax2.grid(True)
     ax2.legend()
 
-    # 3) Learning curve – best CV fold
+    # 3) Learning curve – final training
     ax3 = fig.add_subplot(gs[2, 0])
-    if cv_best_hist is not None and 'loss' in cv_best_hist and 'val_loss' in cv_best_hist:
-        ax3.plot(range(1, len(cv_best_hist['loss'])+1), cv_best_hist['loss'], label='Train loss')
-        ax3.plot(range(1, len(cv_best_hist['val_loss'])+1), cv_best_hist['val_loss'], label='Val loss')
-    ax3.set_title("Learning Curve – Best CV Fold")
+    if final_hist is not None and 'loss' in final_hist:
+        ax3.plot(range(1, len(final_hist['loss'])+1), final_hist['loss'], label='Train loss')
+        if 'val_loss' in final_hist:
+            ax3.plot(range(1, len(final_hist['val_loss'])+1), final_hist['val_loss'], label='Val loss')
+    ax3.set_title("Learning Curve – Final Training")
     ax3.set_xlabel("Epoch")
     ax3.set_ylabel("Loss")
     ax3.grid(True)
     ax3.legend()
-
-    # 4) Learning curve – final training
-    ax4 = fig.add_subplot(gs[3, 0])
-    if final_hist is not None and 'loss' in final_hist and ('val_loss' in final_hist or 'val_loss' in final_hist):
-        ax4.plot(range(1, len(final_hist['loss'])+1), final_hist['loss'], label='Train loss')
-        if 'val_loss' in final_hist:
-            ax4.plot(range(1, len(final_hist['val_loss'])+1), final_hist['val_loss'], label='Val loss')
-    ax4.set_title("Learning Curve – Final Training")
-    ax4.set_xlabel("Epoch")
-    ax4.set_ylabel("Loss")
-    ax4.grid(True)
-    ax4.legend()
 
     saved = None
     for p in out_paths:
@@ -903,14 +971,14 @@ def main():
 
     strat_cfg = HYPERPARAMS['strategy']
     # Development
-    pnl_dev = run_strategy(
+    pnl_dev, trades_dev = run_strategy(
         pred_dev_df, ohlc_map, dev_dates_ordered,
         top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
         tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
         phase='dev'
     )
     # Test
-    pnl_test = run_strategy(
+    pnl_test, trades_test = run_strategy(
         pred_test_df, ohlc_map, test_dates_ordered,
         top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
         tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
@@ -924,11 +992,58 @@ def main():
     log(f"Sharpe_pd (dev) = {sr_pd_dev:.4f}, Sharpe_pa (dev) = {sr_pa_dev:.4f}")
     log(f"Sharpe_pd (test) = {sr_pd_test:.4f}, Sharpe_pa (test) = {sr_pa_test:.4f}")
 
+    # Regresní metriky (Train/Test)
+    mse_tr, mae_tr, rmse_tr, r2_tr = regression_metrics(y_dev, preds_dev)
+    mse_te, mae_te, rmse_te, r2_te = regression_metrics(y_test, preds_test)
+    log("Regresní metriky (Train/Test)")
+    log(f"  mse     {mse_tr:.6f} | {mse_te:.6f}")
+    log(f"  mae     {mae_tr:.6f} | {mae_te:.6f}")
+    log(f"  rmse    {rmse_tr:.6f} | {rmse_te:.6f}")
+    log(f"  r2      {r2_tr:.6f} | {r2_te:.6f}")
+
+    # Výnosové metriky (Train/Test)
+    cum_tr = cumulative_return(pnl_dev)
+    cum_te = cumulative_return(pnl_test)
+    ann_tr = annualized_return(pnl_dev)
+    ann_te = annualized_return(pnl_test)
+    vola_tr = annual_volatility(pnl_dev)
+    vola_te = annual_volatility(pnl_test)
+    mdd_tr = max_drawdown(pnl_dev)
+    mdd_te = max_drawdown(pnl_test)
+
+    log("Výnosové metriky (Train/Test)")
+    log(f"  cum       {cum_tr:.4f} | {cum_te:.4f}")
+    log(f"  ann       {ann_tr:.4f} | {ann_te:.4f}")
+    log(f"  sharpe    {sr_pd_dev:.4f} | {sr_pd_test:.4f}")
+    log(f"  maxdd     {mdd_tr:.4f} | {mdd_te:.4f}")
+    log(f"  vola_ann  {vola_tr:.4f} | {vola_te:.4f}")
+
+    # Metriky obchodů (Train/Test)
+    tm_tr = trade_metrics_from_trades(trades_dev)
+    tm_te = trade_metrics_from_trades(trades_test)
+    log("Metriky obchodů (Train/Test)")
+    log(f"  win_rate         {tm_tr['win_rate']:.4f} | {tm_te['win_rate']:.4f}")
+    log(f"  profit_factor    {tm_tr['profit_factor']:.4f} | {tm_te['profit_factor']:.4f}")
+    log(f"  avg_holding_days {tm_tr['avg_holding_days']:.2f} | {tm_te['avg_holding_days']:.2f}")
+    log(f"  pt_hit_pct       {tm_tr['pt_hit_pct']:.4f} | {tm_te['pt_hit_pct']:.4f}")
+    log(f"  sl_hit_pct       {tm_tr['sl_hit_pct']:.4f} | {tm_te['sl_hit_pct']:.4f}")
+
     # 11) Realizovaná alfa (na test sample)
     # Sladíme benchmark s horizontem pnl_test (jejich průnik indexů)
     bench_test = benchmark.reindex(pnl_test.index).fillna(0.0)
-    alpha, beta, alpha_t = realized_alpha(pnl_test, bench_test)
-    log(f"Realizovaná alfa na testu: alpha={alpha:.6f} (t={alpha_t:.2f}), beta={beta:.4f}")
+    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test, bench_test)
+    log("Realizovaná alfa/beta (Test)")
+    log(f"  alpha_daily {alpha:.8f}")
+    log(f"  alpha_t     {alpha_t:.2f}   alpha_p {alpha_p:.4f}")
+    log(f"  beta        {beta:.4f}")
+    log(f"  beta_t      {beta_t:.2f}   beta_p  {beta_p:.4f}")
+    log(f"  r2          {r2_reg:.4f}")
+
+    # Hedged varianta: return_hedged(t) = return_strategy(t) - beta * return_benchmark(t)
+    hedged_ret = pnl_test - beta * bench_test
+    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret)
+    log(f"Hedged Sharpe (test): pd={sr_pd_hedged:.4f}, pa={sr_pa_hedged:.4f}")
+    hedged_cum_test = (1.0 + hedged_ret).cumprod() - 1.0
 
     # 12) Kumulativní výnosy a graf
     strat_cum_dev = (1 + pnl_dev).cumprod() - 1.0
@@ -947,15 +1062,19 @@ def main():
     test_mask = bench_cum.index >= pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
     bench_cum_test = bench_cum[test_mask]
 
+    # doplň hedged_cum_full z dostupného indexu
+    hedged_cum_full = pd.Series(index=strat_cum_continuous.index, dtype=float)
+    hedged_cum_full.loc[hedged_cum_test.index] = hedged_cum_test.values
     saved_png = plot_dashboard(
         strat_cum=strat_cum_continuous,
         bench_cum=bench_cum,
         test_start_date=HYPERPARAMS['data']['test_start_date'],
         strat_cum_test=strat_cum_test,
         bench_cum_test=bench_cum_test,
-        cv_best_hist=cv_best_hist,
         final_hist=final_hist,
-        out_paths=HYPERPARAMS['output']['png_paths']
+        out_paths=HYPERPARAMS['output']['png_paths'],
+        hedged_cum_full=hedged_cum_full,
+        hedged_cum_test=hedged_cum_test
     )
     if saved_png:
         log(f"Uloženo PNG: {saved_png}")
@@ -969,7 +1088,7 @@ def main():
     log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
     log(f"Sharpe_dev pd={sr_pd_dev:.4f}, pa={sr_pa_dev:.4f}")
     log(f"Sharpe_test pd={sr_pd_test:.4f}, pa={sr_pa_test:.4f}")
-    log(f"Alpha_test={alpha:.6f} (t={alpha_t:.2f}), Beta_test={beta:.4f}")
+    log(f"Alpha_test={alpha:.6f} (t={alpha_t:.2f}, p={alpha_p:.4f}), Beta_test={beta:.4f} (t={beta_t:.2f}, p={beta_p:.4f}), R2={r2_reg:.4f}")
     log(f"Doba běhu: {elapsed/60:.2f} min")
 
 if __name__ == "__main__":
