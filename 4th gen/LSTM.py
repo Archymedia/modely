@@ -76,11 +76,11 @@ HYPERPARAMS = {
         'optimizer': 'adam',
         'loss': 'mse',
         'batch_size': 64,
-        'CV_epochs': 100,          # kratší trénink pro CV
-        'final_epochs': 100,      # finální trénink na celém developmentu
-        'early_stopping_patience': 10,
+        'CV_epochs': 2,          # kratší trénink pro CV
+        'final_epochs': 2,      # finální trénink na celém developmentu
+        'early_stopping_patience': 1,
         'seed': 42,
-        'k_folds': 3,
+        'k_folds': 2,
         'keras_verbose': 1
     },
     'strategy': {
