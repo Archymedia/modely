@@ -592,13 +592,10 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
 
     # --- Rychlejší přístup k datům: keše per RIC ---
     ric_dates = {}
-    ric_pos_of_date = {}
     ric_ohlc_np = {}
     for idc, df_idc in ohlc_map.items():
         dates_arr = pd.DatetimeIndex(df_idc['Date'].values)
         ric_dates[idc] = dates_arr
-        # Mapování date -> pozice řádku (místo searchsorted v hot‑loopu)
-        ric_pos_of_date[idc] = {d: i for i, d in enumerate(dates_arr)}
         # OHLC jako NumPy (rychlé čtení)
         ric_ohlc_np[idc] = df_idc[['OpenAdj','HighAdj','LowAdj','CloseAdj']].to_numpy()
 
@@ -622,85 +619,118 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
     # Sledujeme, které (sig_day, instrument) už byly otevřeny
     opened_signal_pairs = set()
 
+    # === Denní plánovač pro otevřené pozice ===
+    # active_schedule[date] -> seznam indexů v listu `positions`, které je třeba dnes zpracovat
+    active_schedule = {}
+    # Pro rychlé přidávání do schedule použijeme malou util-funkci
+    def sched_add(day, pos_index):
+        lst = active_schedule.get(day)
+        if lst is None:
+            active_schedule[day] = [pos_index]
+        else:
+            lst.append(pos_index)
+
+    # Předvýběr plánovaných otevření (pro optimalizaci)
+    planned_openings = {}
+    for sig_day in signal_dates:
+        day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
+        entries = pd.concat([
+            day_preds.head(top_n).assign(direction=+1),
+            day_preds.tail(bottom_n).assign(direction=-1)
+        ], axis=0)
+        for _, row in entries.iterrows():
+            idc = row['IDContIndex']
+            key = (sig_day, idc)
+            if idc not in ric_dates:
+                continue
+            dates_arr = ric_dates[idc]
+            target_day = sig_day + timedelta(days=1)
+            ins = dates_arr.searchsorted(target_day)
+            if ins >= len(dates_arr):
+                continue
+            planned_entry_day = dates_arr[ins]
+            if planned_entry_day not in planned_openings:
+                planned_openings[planned_entry_day] = []
+            planned_openings[planned_entry_day].append((idc, int(row['direction']), ins))
+
     daily_pnl_list = []
     for d in all_dates:
         # Heartbeat log
         if len(daily_pnl_list) % heartbeat_every == 0 and len(daily_pnl_list) > 0:
             log(f"  ...simulace {phase or ''}: zpracováno {len(daily_pnl_list)} dní")
 
-        # 2) Otevři nové pozice podle signálů, jejichž plánovaný entry den je právě dnes
-        yesterday = d - timedelta(days=1)
-        eligible = signal_dates[signal_dates <= yesterday]
-        # Pro KAŽDÝ vhodný signální den zkontrolujeme plánovaný entry day per instrument
-        for sig_day in eligible:
-            day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
-            entries = pd.concat([
-                day_preds.head(top_n).assign(direction=+1),
-                day_preds.tail(bottom_n).assign(direction=-1)
-            ], axis=0)
-            for _, row in entries.iterrows():
-                idc = row['IDContIndex']
-                key = (sig_day, idc)
-                if key in opened_signal_pairs:
-                    continue
-                if idc not in ric_dates:
-                    continue
-                dates_arr = ric_dates[idc]
-                # PLÁNOVANÝ entry den = první obchodní den ≥ (sig_day + 1 den)
-                target_day = sig_day + timedelta(days=1)
-                ins = dates_arr.searchsorted(target_day)
-                if ins >= len(dates_arr):
-                    continue  # instrument už dále neobchoduje
-                planned_entry_day = dates_arr[ins]
-                # Otevři POUZE pokud právě dnes nastal plánovaný vstup
-                if planned_entry_day != d:
-                    continue
-                # Otevření pozice na open plánovaného dne
-                o, h, l, c = ric_ohlc_np[idc][ins]
-                entry_date_eff = planned_entry_day
+        # 2) Otevři nové pozice podle plánovače
+        if d in planned_openings:
+            for (idc, direction, idx) in planned_openings[d]:
+                o, h, l, c = ric_ohlc_np[idc][idx]
                 entry_price = float(o)
-                pos = Position(ric=idc, direction=int(row['direction']), entry_date=entry_date_eff,
+                pos = Position(ric=idc, direction=direction, entry_date=d,
                                entry_price=entry_price, tp=tp, sl=sl)
-                pos.last_price = entry_price  # referenční cena pro první M2M
+                pos.last_price = entry_price
+                pos.idx = int(idx)  # nastav ukazatel na dnešní řádek v OHLC
                 positions.append(pos)
-                opened_signal_pairs.add(key)
+                # zařaď aktuálně otevřenou pozici do dnešního plánu zpracování
+                sched_add(d, len(positions) - 1)
 
         pnl_today = []
 
-        # 1) Nejprve zkontroluj bariéry a M2M pro existující pozice na den d
-        to_remove = []
-        for i, pos in enumerate(positions):
-            idc = pos.ric  # zde nyní držíme IDContIndex
-            idx = ric_pos_of_date[idc].get(d, None)
-            if idx is None:
-                continue
-            o, h, l, c = ric_ohlc_np[idc][idx]
-            hit_today, realized = pos.check_barriers(
-                date=d,
-                high=float(h),
-                low=float(l),
-                close=float(c),
-                priority=priority
-            )
-            pnl_today.append(realized)
-            if hit_today and not pos.is_open:
-                to_remove.append(i)
+        # Zpracuj pouze ty pozice, které mají DNES obchodní den
+        todays_list = active_schedule.pop(d, None)
+        if todays_list:
+            # abychom byli robustní vůči mazání, projdeme kopii indexů a kontrolujeme, zda je pozice stále otevřená
+            for i in list(todays_list):
+                if i >= len(positions):
+                    continue
+                pos = positions[i]
+                if not pos.is_open or pos.idx is None:
+                    continue
+                idc = pos.ric
+                dates_arr = ric_dates[idc]
+                # obrana: pokud z nějakého důvodu nesedí datum, přeskoč (neměl by nastat)
+                if pos.idx >= len(dates_arr) or dates_arr[pos.idx] != d:
+                    continue
+                o, h, l, c = ric_ohlc_np[idc][pos.idx]
+                hit_today, realized = pos.check_barriers(
+                    date=d,
+                    high=float(h),
+                    low=float(l),
+                    close=float(c),
+                    priority=priority
+                )
+                pnl_today.append(realized)
+                if hit_today and not pos.is_open:
+                    # uzavřeno – nic dalšího neplánujeme
+                    continue
+                else:
+                    # Naplánuj pozici na další obchodní den instrumentu (pokud existuje)
+                    next_idx = pos.idx + 1
+                    if next_idx < len(dates_arr):
+                        next_day = dates_arr[next_idx]
+                        pos.idx = next_idx
+                        sched_add(next_day, i)
+                    else:
+                        # instrument už nemá další den – ponecháme bez re‑plánu
+                        pos.idx = next_idx
 
-        # odstraň uzavřené (od konce, aby se indexy neposunuly)
-        for i in reversed(to_remove):
-            pos = positions[i]
-            trades.append({
-                'IDContIndex': pos.ric,
-                'direction': pos.direction,
-                'entry_date': pos.entry_date,
-                'exit_date': pos.exit_date,
-                'holding_days': int((pos.exit_date - pos.entry_date).days) if (pos.exit_date is not None and pos.entry_date is not None) else None,
-                'entry_price': float(pos.entry_price),
-                'exit_price': float(pos.exit_price) if pos.exit_price is not None else None,
-                'pnl': float((pos.exit_price / pos.entry_price) - 1.0) if (pos.exit_price is not None and pos.direction == +1) else float((pos.entry_price / pos.exit_price) - 1.0) if (pos.exit_price is not None and pos.direction == -1) else None,
-                'exit_reason': pos.exit_reason
-            })
-            positions.pop(i)
+        # Zaloguj uzavřené obchody za dnešní den (neodstraňuj z listu positions kvůli stabilním indexům)
+        # Projdeme původní todays_list a pokud byla pozice dnes uzavřena, zapíšeme trade.
+        if todays_list:
+            for i in todays_list:
+                if i >= len(positions):
+                    continue
+                pos = positions[i]
+                if not pos.is_open and pos.exit_date == d and pos.exit_price is not None:
+                    trades.append({
+                        'IDContIndex': pos.ric,
+                        'direction': pos.direction,
+                        'entry_date': pos.entry_date,
+                        'exit_date': pos.exit_date,
+                        'holding_days': int((pos.exit_date - pos.entry_date).days) if (pos.exit_date is not None and pos.entry_date is not None) else None,
+                        'entry_price': float(pos.entry_price),
+                        'exit_price': float(pos.exit_price),
+                        'pnl': float((pos.exit_price / pos.entry_price) - 1.0) if (pos.direction == +1) else float((pos.entry_price / pos.exit_price) - 1.0),
+                        'exit_reason': pos.exit_reason
+                    })
 
         # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi? V M2M portfoliu je počet pozic proměnný;
         # použijeme equal-weighted průměr z dnešních příspěvků (pokud dnes není žádná pozice → 0).
