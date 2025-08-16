@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import tensorflow as tf
 import itertools
 
@@ -421,7 +422,7 @@ def build_lstm_model(input_shape, hp):
 
     model = models.Sequential([
         layers.Input(shape=input_shape),
-        layers.LSTM(lu, activation='tanh', dropout=dr, recurrent_dropout=dr,
+        layers.LSTM(lu, activation='tanh', dropout=dr, recurrent_dropout=0.0,
                     kernel_regularizer=regularizers.l2(l2w),
                     recurrent_regularizer=regularizers.l2(l2w),
                     bias_regularizer=None),
@@ -839,6 +840,7 @@ def realized_alpha(strategy_ret, benchmark_ret):
     r2 = float(model.rsquared)
     return alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2
 
+
 def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     plt.figure(figsize=(11,6))
     plt.plot(strategy_cum.index, strategy_cum.values, label='Strategy (cum)')
@@ -860,6 +862,89 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
             continue
     plt.close()
     return saved
+
+# ---- Pretty terminal tables ----
+
+def _fmt_pct(x):
+    try:
+        return f"{x*100:.2f}%"
+    except Exception:
+        return str(x)
+
+def _fmt_float(x):
+    try:
+        return f"{x:.6f}"
+    except Exception:
+        return str(x)
+
+def _fmt_int(x):
+    try:
+        return f"{int(x)}"
+    except Exception:
+        return str(x)
+
+def _make_table(title, rows):
+    """rows: list of (left_label, value_str)"""
+    left_w = max((len(l) for l, _ in rows), default=0)
+    right_w = max((len(v) for _, v in rows), default=0)
+    total_w = left_w + 2 + right_w
+    bar = "+" + "-" * (total_w + 2) + "+"
+    out = [bar, f"| {title.center(total_w)} |", bar]
+    for l, v in rows:
+        out.append(f"| {l.ljust(left_w)}  {v.rjust(right_w)} |")
+    out.append(bar)
+    return "\n".join(out)
+
+
+def print_test_oos_table(metrics):
+    rows = [
+        ("MSE", _fmt_float(metrics['mse'])),
+        ("RMSE", _fmt_float(metrics['rmse'])),
+        ("MAE", _fmt_float(metrics['mae'])),
+        ("R²", _fmt_float(metrics['r2'])),
+        ("Cum. Return", _fmt_pct(metrics['cum_return'])),
+        ("Annual Return", _fmt_pct(metrics['ann_return'])),
+        ("Sharpe (pd)", _fmt_float(metrics['sharpe_pd'])),
+        ("Sharpe (pa)", _fmt_float(metrics['sharpe_pa'])),
+        ("Ann. Volatility", _fmt_pct(metrics['vola_ann'])),
+        ("Max Drawdown", _fmt_pct(metrics['maxdd'])),
+        ("Alpha (daily)", _fmt_float(metrics['alpha_daily'])),
+        ("Alpha (annual)", _fmt_float(metrics['alpha_annual'])),
+        ("Alpha t-stat", _fmt_float(metrics['alpha_t'])),
+        ("Alpha p-value", _fmt_float(metrics['alpha_p'])),
+        ("Beta", _fmt_float(metrics['beta'])),
+        ("Beta t-stat", _fmt_float(metrics['beta_t'])),
+        ("Beta p-value", _fmt_float(metrics['beta_p'])),
+        ("Regress R²", _fmt_float(metrics['r2_reg'])),
+        ("Hedged Sharpe (pd)", _fmt_float(metrics['hedged_sharpe_pd'])),
+        ("Hedged Sharpe (pa)", _fmt_float(metrics['hedged_sharpe_pa'])),
+        ("Win rate", _fmt_pct(metrics['win_rate'])),
+        ("Profit factor", _fmt_float(metrics['profit_factor'])),
+        ("Avg holding days", _fmt_float(metrics['avg_holding_days'])),
+        ("TP hit %", _fmt_pct(metrics['pt_hit_pct'])),
+        ("SL hit %", _fmt_pct(metrics['sl_hit_pct'])),
+    ]
+    table = _make_table("TEST OOS (rebased from 2021-01-01)", rows)
+    for line in table.splitlines():
+        log(line)
+
+
+def print_dev_table(metrics):
+    rows = [
+        ("MSE", _fmt_float(metrics['mse'])),
+        ("RMSE", _fmt_float(metrics['rmse'])),
+        ("MAE", _fmt_float(metrics['mae'])),
+        ("R²", _fmt_float(metrics['r2'])),
+        ("Cum. Return", _fmt_pct(metrics['cum_return'])),
+        ("Annual Return", _fmt_pct(metrics['ann_return'])),
+        ("Sharpe (pd)", _fmt_float(metrics['sharpe_pd'])),
+        ("Sharpe (pa)", _fmt_float(metrics['sharpe_pa'])),
+        ("Ann. Volatility", _fmt_pct(metrics['vola_ann'])),
+        ("Max Drawdown", _fmt_pct(metrics['maxdd'])),
+    ]
+    table = _make_table("DEVELOPMENT (2005 - 2020)", rows)
+    for line in table.splitlines():
+        log(line)
 
 # ---- Extra saving helpers ----
 
@@ -926,6 +1011,39 @@ def save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, out_paths):
     plt.close()
     return saved
 
+# === Extra helper: export TEST OOS cumulative strategy series to Excel with CSV fallback ===
+def save_test_oos_excel(strat_cum_test: pd.Series, out_paths):
+    """Save TEST OOS cumulative strategy series to an Excel file.
+    Tries .xlsx first; if that fails (e.g., openpyxl missing), falls back to .csv.
+    Returns the path of the saved file or None.
+    """
+    # Prefer first writable sibling path with .xlsx
+    xlsx_paths = _derive_sibling_paths(out_paths, "LSTM_test_oos_cum.xlsx")
+    csv_paths  = _derive_sibling_paths(out_paths, "LSTM_test_oos_cum.csv")
+
+    df = pd.DataFrame({"Strategy_cum": strat_cum_test.values}, index=pd.DatetimeIndex(strat_cum_test.index))
+    df.index.name = "Date"
+
+    # Try Excel first
+    for p in xlsx_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            # Let pandas choose engine (openpyxl if present)
+            df.to_excel(p, index=True)
+            return p
+        except Exception:
+            continue
+
+    # Fallback to CSV
+    for p in csv_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            df.to_csv(p, index=True)
+            return p
+        except Exception:
+            continue
+    return None
+
 # =========================
 # ======= DASHBOARD =======
 # =========================
@@ -944,7 +1062,10 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     # Restrict x-axis from 2005 onwards
     ax1.set_xlim(pd.to_datetime("2005-01-01"), strat_cum.index.max())
     # Shade the development period (left of test start)
-    ax1.axvspan(ax1.get_xlim()[0], ts, facecolor='yellow', alpha=0.1)
+    # Convert test start date to Matplotlib's numeric date for axvspan to avoid float/Timestamp mix
+    xmin, xmax = ax1.get_xlim()
+    ts_num = mdates.date2num(ts)
+    ax1.axvspan(xmin, ts_num, facecolor='yellow', alpha=0.1)
     # popisek vertikální čáry posunutý dolů (na spodek grafu) a formátovaný jako 1.1.2021
     ylim = ax1.get_ylim()
     ax1.annotate(ts.strftime("%d.%m.%Y"), xy=(ts, ylim[0]), xytext=(5, 10),
@@ -1132,7 +1253,6 @@ def main():
     sr_pd_test, sr_pa_test = sharpe_ratio(pnl_test)
     # Sharpe pro OUT-OF-SAMPLE test-only běh (vedle full-test perspektivy)
     sr_pd_test_fresh, sr_pa_test_fresh = sharpe_ratio(pnl_test_rebased)
-    log(f"Sharpe_pd (test - out-of-sample only) = {sr_pd_test_fresh:.4f}, Sharpe_pa (test - out-of-sample only) = {sr_pa_test_fresh:.4f}")
 
     # Další metriky pro OUT-OF-SAMPLE test-only běh
     cum_te_fresh = cumulative_return(pnl_test_rebased)
@@ -1149,11 +1269,6 @@ def main():
     # Regresní metriky (Train/Test)
     mse_tr, mae_tr, rmse_tr, r2_tr = regression_metrics(y_dev, preds_dev)
     mse_te, mae_te, rmse_te, r2_te = regression_metrics(y_test, preds_test)
-    log("Regresní metriky (Train/Test)")
-    log(f"  mse     {mse_tr:.6f} | {mse_te:.6f}")
-    log(f"  mae     {mae_tr:.6f} | {mae_te:.6f}")
-    log(f"  rmse    {rmse_tr:.6f} | {rmse_te:.6f}")
-    log(f"  r2      {r2_tr:.6f} | {r2_te:.6f}")
 
     # (Moved up) Realizovaná alfa na TEST (fresh-only) a hedged metriky, aby byly k dispozici pro výpis níže
     bench_test = benchmark.reindex(pnl_test_rebased.index).fillna(0.0)
@@ -1172,57 +1287,26 @@ def main():
     mdd_tr = max_drawdown(pnl_dev)
     mdd_te = max_drawdown(pnl_test)
 
-    log("Výnosové metriky (Train/Test)")
-    log("  Pozn.: TEST (full-run, navazující na DEV, viz 1. graf); TEST_FRESH = nový běh od 2021-01-01 (fresh portfolio)")
-    log(f"  cum       {cum_tr:.4f} | {cum_te:.4f}")
-    log(f"  ann       {ann_tr:.4f} | {ann_te:.4f}")
-    log(f"  sharpe    {sr_pd_dev:.4f} | {sr_pd_test:.4f}")
-    log(f"  maxdd     {mdd_tr:.4f} | {mdd_te:.4f}")
-    log(f"  vola_ann  {vola_tr:.4f} | {vola_te:.4f}")
-    log(f"  sharpe_test_fresh (unhedged | hedged)  {sr_pd_test_fresh:.4f} | {sr_pd_hedged:.4f}")
-
-    # Metriky obchodů (Train/Test)
+    # Trade metrics for dev/test (for later summary)
     tm_tr = trade_metrics_from_trades(trades_dev)
     tm_te = trade_metrics_from_trades(trades_test)
-    log("Metriky obchodů (Train/Test)")
-    log("  Pozn.: TEST (full-run, navazující na DEV, viz 1. graf); TEST_FRESH = nový běh od 2021-01-01 (fresh portfolio)")
-    log(f"  win_rate         {tm_tr['win_rate']:.4f} | {tm_te['win_rate']:.4f}")
-    log(f"  profit_factor    {tm_tr['profit_factor']:.4f} | {tm_te['profit_factor']:.4f}")
-    log(f"  avg_holding_days {tm_tr['avg_holding_days']:.2f} | {tm_te['avg_holding_days']:.2f}")
-    log(f"  pt_hit_pct       {tm_tr['pt_hit_pct']:.4f} | {tm_te['pt_hit_pct']:.4f}")
-    log(f"  sl_hit_pct       {tm_tr['sl_hit_pct']:.4f} | {tm_te['sl_hit_pct']:.4f}")
-    log(f"  (test_out_of_sample)     win_rate {tm_te_fresh['win_rate']:.4f}, profit_factor {tm_te_fresh['profit_factor']:.4f}, avg_holding_days {tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct {tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct {tm_te_fresh['sl_hit_pct']:.4f}")
 
-    # === POUZE OUT-OF-SAMPLE TEST PERIOD (fresh portfolio od 2021-01-01) ===
-    log("=== POUZE OUT-OF-SAMPLE TEST PERIOD ===")
-    log("(fresh portfolio; bez navazování na DEV, viz test-only běh)")
-
-    # Predikční přesnost (sekvenční regresní metriky na test subsekvencích)
-    log(f"MSE = {mse_te:.6f} | RMSE = {rmse_te:.6f} | R2 = {r2_te:.6f}")
-
-    # Výnos a riziko portfolia (z test-only M2M běhu)
-    log(f"Kumulativní výnos = {cum_te_fresh:.4f} | Annualizovaný výnos = {ann_te_fresh:.4f}")
-    log(f"Riziko: Sharpe_pd = {sr_pd_test_fresh:.4f} | Sharpe_pa = {sr_pa_test_fresh:.4f} | Volatilita_ann = {vola_te_fresh:.4f} | MaxDD = {mdd_te_fresh:.4f}")
-
-    # Realizovaná alfa (OLS na test-only sérii)
-    alpha_annual_fresh = alpha * 252.0
-    log("Realizovaná alfa (OLS):")
-    log(f"  alpha_daily = {alpha:.8f} | alpha_annual = {alpha_annual_fresh:.4f} | t = {alpha_t:.2f} | p = {alpha_p:.4f}")
-    log(f"  beta = {beta:.4f} | t = {beta_t:.2f} | p = {beta_p:.4f} | R2 = {r2_reg:.4f}")
-    log(f"  Hedged Sharpe (strategy - beta*benchmark): pd = {sr_pd_hedged:.4f} | pa = {sr_pa_hedged:.4f}")
-
-    # Obchodní metriky (test-only)
-    log("Obchodní metriky (test-only):")
-    log(f"  win_rate = {tm_te_fresh['win_rate']:.4f} | profit_factor = {tm_te_fresh['profit_factor']:.4f} | avg_holding_days = {tm_te_fresh['avg_holding_days']:.2f} | TP% = {tm_te_fresh['pt_hit_pct']:.4f} | SL% = {tm_te_fresh['sl_hit_pct']:.4f}")
-
-    # 11) Realizovaná alfa (na test sample) – jen výpis, výpočet proběhl výše
-    log("Realizovaná alfa/beta (Test)")
-    log(f"  alpha_daily {alpha:.8f}")
-    log(f"  alpha_t     {alpha_t:.2f}   alpha_p {alpha_p:.4f}")
-    log(f"  beta        {beta:.4f}")
-    log(f"  beta_t      {beta_t:.2f}   beta_p  {beta_p:.4f}")
-    log(f"  r2          {r2_reg:.4f}")
-    log(f"Hedged Sharpe (test - out-of-sample only): pd={sr_pd_hedged:.4f}, pa={sr_pa_hedged:.4f}")
+    # === POUZE OUT-OF-SAMPLE TEST PERIOD (Pretty Table) ===
+    test_metrics_tbl = {
+        'mse': mse_te, 'rmse': rmse_te, 'mae': mae_te, 'r2': r2_te,
+        'cum_return': cum_te_fresh, 'ann_return': ann_te_fresh,
+        'sharpe_pd': sr_pd_test_fresh, 'sharpe_pa': sr_pa_test_fresh,
+        'vola_ann': vola_te_fresh, 'maxdd': mdd_te_fresh,
+        'alpha_daily': alpha, 'alpha_annual': alpha * 252.0,
+        'alpha_t': alpha_t, 'alpha_p': alpha_p, 'beta': beta, 'beta_t': beta_t, 'beta_p': beta_p, 'r2_reg': r2_reg,
+        'hedged_sharpe_pd': sr_pd_hedged, 'hedged_sharpe_pa': sr_pa_hedged,
+        'win_rate': tm_te_fresh.get('win_rate', np.nan),
+        'profit_factor': tm_te_fresh.get('profit_factor', np.nan),
+        'avg_holding_days': tm_te_fresh.get('avg_holding_days', np.nan),
+        'pt_hit_pct': tm_te_fresh.get('pt_hit_pct', np.nan),
+        'sl_hit_pct': tm_te_fresh.get('sl_hit_pct', np.nan),
+    }
+    print_test_oos_table(test_metrics_tbl)
 
     # 12) Kumulativní výnosy a graf
     strat_cum_full = (1 + pnl_all).cumprod() - 1.0   # Panel 1: nepřerušená křivka
@@ -1267,6 +1351,13 @@ def main():
     else:
         log("Nepodařilo se uložit test panel graf.")
 
+    # === EXPORT: TEST OOS cumulative strategy to Excel (with CSV fallback) ===
+    saved_xlsx = save_test_oos_excel(strat_cum_test, HYPERPARAMS['output']['png_paths'])
+    if saved_xlsx:
+        log(f"Uloženo TEST OOS cumulative (Excel/CSV): {saved_xlsx}")
+    else:
+        log("Nepodařilo se uložit TEST OOS cumulative do Excel/CSV.")
+
     # 13) Finální summary
     t1 = time.time()
     elapsed = t1 - t0
@@ -1282,24 +1373,16 @@ def main():
     log(f"Features: window(h)={hp_f['window']}, RSI={hp_f['use_RSI']}(p={hp_f['rsi_period']}), CCI={hp_f['use_CCI']}(p={hp_f['cci_period']}), STOCH={hp_f['use_STOCH']}(p={hp_f['stoch_period']})")
     log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
 
-    log("--- PERFORMANCE (DAILY) ---")
-    log("DEV (full-run up to 2020-12-31):")
-    log(f"  cum={cum_tr:.4f} | ann={ann_tr:.4f} | sharpe_pd={sr_pd_dev:.4f} | sharpe_pa={sr_pa_dev:.4f} | maxdd={mdd_tr:.4f} | vola_ann={vola_tr:.4f}")
-    log("TEST (full-run, navazující na DEV, viz 1. graf):")
-    log(f"  cum={cum_te:.4f} | ann={ann_te:.4f} | sharpe_pd={sr_pd_test:.4f} | sharpe_pa={sr_pa_test:.4f} | maxdd={mdd_te:.4f} | vola_ann={vola_te:.4f}")
-    log("TEST OUT-OF-SAMPLE-ONLY (portfolio starts at 0 on 2021-01-01):")
-    log(f"  cum={cum_te_fresh:.4f} | ann={ann_te_fresh:.4f} | sharpe_pd={sr_pd_test_fresh:.4f} | sharpe_pa={sr_pa_test_fresh:.4f} | maxdd={mdd_te_fresh:.4f} | vola_ann={vola_te_fresh:.4f}")
-    log(f"  (hedged) sharpe_pd={sr_pd_hedged:.4f} | sharpe_pa={sr_pa_hedged:.4f}")
+    # --- Tidy terminal recap: Only TEST OOS and DEVELOPMENT ---
+    print_test_oos_table(test_metrics_tbl)
 
-    log("--- TRADES ---")
-    log(f"DEV:   win_rate={tm_tr['win_rate']:.4f}, profit_factor={tm_tr['profit_factor']:.4f}, avg_holding_days={tm_tr['avg_holding_days']:.2f}, pt_hit_pct={tm_tr['pt_hit_pct']:.4f}, sl_hit_pct={tm_tr['sl_hit_pct']:.4f}")
-    log(f"TEST:  win_rate={tm_te['win_rate']:.4f}, profit_factor={tm_te['profit_factor']:.4f}, avg_holding_days={tm_te['avg_holding_days']:.2f}, pt_hit_pct={tm_te['pt_hit_pct']:.4f}, sl_hit_pct={tm_te['sl_hit_pct']:.4f}")
-    log(f"TEST_OUT_OF_SAMPLE:  win_rate={tm_te_fresh['win_rate']:.4f}, profit_factor={tm_te_fresh['profit_factor']:.4f}, avg_holding_days={tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct={tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct={tm_te_fresh['sl_hit_pct']:.4f}")
-
-    log("--- REALIZED ALPHA on TEST (out-of-sample only) ---")
-    alpha_annual = alpha * 252.0
-    log(f"alpha_daily={alpha:.8f}, alpha_annual={alpha_annual:.4f}, alpha_t={alpha_t:.2f}, alpha_p={alpha_p:.4f}")
-    log(f"beta={beta:.4f}, beta_t={beta_t:.2f}, beta_p={beta_p:.4f}, R2={r2_reg:.4f}")
+    dev_metrics_tbl = {
+        'mse': mse_tr, 'rmse': rmse_tr, 'mae': mae_tr, 'r2': r2_tr,
+        'cum_return': cum_tr, 'ann_return': ann_tr,
+        'sharpe_pd': sr_pd_dev, 'sharpe_pa': sr_pa_dev,
+        'vola_ann': vola_tr, 'maxdd': mdd_tr,
+    }
+    print_dev_table(dev_metrics_tbl)
 
     log(f"Runtime: {elapsed/60:.2f} min")
 
