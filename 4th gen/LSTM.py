@@ -28,9 +28,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
-from sklearn.utils import shuffle as sk_shuffle
 
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
@@ -71,17 +69,29 @@ HYPERPARAMS = {
         'stoch_period': 14
     },
     'model': {
-        'lstm_units': 64,
-        'dense_units': 64,
-        'optimizer': 'adam',
-        'loss': 'mse',
-        'batch_size': 64,
-        'CV_epochs': 2,          # kratší trénink pro CV
-        'final_epochs': 2,      # finální trénink na celém developmentu
-        'early_stopping_patience': 1,
+        # Fixed training controls (not tuned)
+        'CV_epochs': 10,          # epochs per fold during tuning (edit as needed)
+        'final_epochs': 10,       # epochs for final training on full development
+        'early_stopping_patience': 5,
+        'k_folds': 3,
+        'keras_verbose': 1,
         'seed': 42,
-        'k_folds': 2,
-        'keras_verbose': 1
+        # Fixed (NOT tuned)
+        'dropout_rate': 0.2,
+        # Tuning config – NO FALLBACKS: values are chosen ONLY from this search space
+        'tuning': {
+            'enabled': True,
+            'search_space': {
+                'lstm_units': [64, 128],
+                'dense_units': [64, 128],
+                'learning_rate': [0.0001, 0.0003, 0.001],
+                'batch_size': [32, 64],
+                'l2': [0.0001, 0.001]
+            },
+            'scoring': 'val_loss',   # minimized
+        },
+        'optimizer': 'adam',
+        'loss': 'mse'
     },
     'strategy': {
         'top_n': 10,
@@ -393,31 +403,55 @@ def compute_mu_sigma(X):
 def standardize_with(X, mu, sigma):
     return (X - mu) / sigma
 
+# ---- Enforce tuned hyperparams are always provided ----
+REQUIRED_TUNED_KEYS = ['lstm_units','dense_units','learning_rate','batch_size','l2']
+
+def _require_tuned(hp):
+    missing = [k for k in REQUIRED_TUNED_KEYS if k not in hp]
+    if missing:
+        raise ValueError(f"Missing tuned hyperparameters: {missing}. Tuning has NO defaults; define them in search_space.")
+
 def build_lstm_model(input_shape, hp):
+    from tensorflow.keras import regularizers
+    lr = float(hp['learning_rate'])
+    l2w = float(hp['l2'])
+    du = int(hp['dense_units'])
+    lu = int(hp['lstm_units'])
+    dr = float(hp['dropout_rate'])  # fixed (not tuned)
+
     model = models.Sequential([
         layers.Input(shape=input_shape),
-        layers.LSTM(hp['lstm_units']),
-        layers.Dense(hp['dense_units'], activation='relu'),
+        layers.LSTM(lu, activation='tanh', dropout=dr, recurrent_dropout=dr,
+                    kernel_regularizer=regularizers.l2(l2w),
+                    recurrent_regularizer=regularizers.l2(l2w),
+                    bias_regularizer=None),
+        layers.Dense(du, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2w)),
+        layers.Dropout(dr),
         layers.Dense(1, activation='linear')
     ])
-    model.compile(optimizer=hp['optimizer'], loss=hp['loss'])
+    opt = optimizers.Adam(learning_rate=lr)
+    model.compile(optimizer=opt, loss='mse')
     return model
 
-def cv_train_lstm(X_dev, y_dev, dates_dev):
-    """ k-fold time-based split přes datumy v dev. """
-    hp = HYPERPARAMS['model']
-    k_folds = int(hp.get('k_folds', 3))
-    log(f"Spouštím {k_folds}-fold time-based cross-validaci (bez leaků v normalizaci)...")
+def cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=None):
+    """Time-based k-fold CV on development set with anti-leak normalization.
+    Returns (mean_best_val_loss, histories_per_fold) for the given hyperparameters.
+    """
+    base = HYPERPARAMS['model'].copy()
+    hp = base if hp_override is None else {**base, **hp_override}
+    _require_tuned(hp)
+    k_folds = int(hp['k_folds'])
+    log(f"CV {k_folds}-fold pro hp={ {k: hp[k] for k in ['lstm_units','dense_units','learning_rate','batch_size','l2']} }")
+
     N = len(y_dev)
     order = np.argsort(dates_dev)
     X_dev = X_dev[order]
     y_dev = y_dev[order]
     dates_dev = dates_dev[order]
 
-    # rozdělíme development na k_folds chronologických bloků
     folds = np.array_split(np.arange(N), k_folds)
     val_losses = []
-    models_trained = []
     histories = []
 
     for fold_idx in range(k_folds):
@@ -427,7 +461,6 @@ def cv_train_lstm(X_dev, y_dev, dates_dev):
         X_train, y_train = X_dev[train_idx], y_dev[train_idx]
         X_val, y_val = X_dev[val_idx], y_dev[val_idx]
 
-        # mu/sigma jen z train části fold-u
         mu, sigma = compute_mu_sigma(X_train)
         X_train_n = standardize_with(X_train, mu, sigma)
         X_val_n   = standardize_with(X_val,   mu, sigma)
@@ -439,25 +472,34 @@ def cv_train_lstm(X_dev, y_dev, dates_dev):
             validation_data=(X_val_n, y_val),
             epochs=hp['CV_epochs'],
             batch_size=hp['batch_size'],
-            verbose=HYPERPARAMS['model'].get('keras_verbose', 1),
+            verbose=hp.get('keras_verbose', 1),
             callbacks=[es]
         )
         histories.append(hist.history)
-        best_val = min(hist.history['val_loss'])
+        best_val = float(np.min(hist.history['val_loss']))
         val_losses.append(best_val)
-        models_trained.append((model, mu, sigma))
-        log(f"Fold {fold_idx+1}/{k_folds} hotov. Nejlepší val_loss={best_val:.6f}")
+        log(f"  Fold {fold_idx+1}/{k_folds}: best val_loss={best_val:.6f}")
 
-    best_fold = int(np.argmin(val_losses))
-    log(f"CV hotovo. Val loss per fold: {[round(v,6) for v in val_losses]} → vybírám fold {best_fold+1}")
-    best_model, best_mu, best_sigma = models_trained[best_fold]
-    best_history = histories[best_fold]
-    return best_model, best_mu, best_sigma, histories, best_history
+    mean_best = float(np.mean(val_losses)) if len(val_losses) > 0 else np.inf
+    log(f"=> mean best val_loss across folds: {mean_best:.6f}")
+    return mean_best, histories
 
-def final_train_lstm(X_dev, y_dev):
-    """ Finální trénink na celém developmentu; mu/sigma z celého developmentu. """
-    log("Finální trénink LSTM na celém development setu...")
-    hp = HYPERPARAMS['model']
+import itertools
+
+def make_param_grid(search_space):
+    keys = list(search_space.keys())
+    values = [search_space[k] for k in keys]
+    for combo in itertools.product(*values):
+        yield dict(zip(keys, combo))
+
+def format_hp_short(hp):
+    return f"LSTM={hp['lstm_units']}, Dense={hp['dense_units']}, lr={hp['learning_rate']}, bs={hp['batch_size']}, l2={hp['l2']}"
+
+def final_train_lstm(X_dev, y_dev, best_hp):
+    """Final training on the full development set with the selected hyperparameters."""
+    log("Finální trénink LSTM na celém developmentu s vybranými hyperparametry...")
+    hp = {**HYPERPARAMS['model'], **best_hp}
+    _require_tuned(hp)
     mu, sigma = compute_mu_sigma(X_dev)
     X_dev_n = standardize_with(X_dev, mu, sigma)
 
@@ -465,10 +507,10 @@ def final_train_lstm(X_dev, y_dev):
     es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
     hist = model.fit(
         X_dev_n, y_dev,
-        validation_split=0.1,   # malý holdout pro kontrolu ES
+        validation_split=0.1,
         epochs=hp['final_epochs'],
         batch_size=hp['batch_size'],
-        verbose=HYPERPARAMS['model'].get('keras_verbose', 1),
+        verbose=hp.get('keras_verbose', 1),
         callbacks=[es]
     )
     log(f"Finální trénink hotov. Nejlepší val_loss={min(hist.history['val_loss']):.6f}")
@@ -574,14 +616,11 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
 
     positions = []  # otevřené pozice
     trades = []  # uzavřené obchody pro metriky
-    daily_pnl = {}
 
     # Mapa: pro každý den vybereme z pred_df nové vstupy, které mají signál včerejška (protože vstup je dnes)
     pred_by_signal = pred_df.groupby('date_t')
     # Seznam dostupných signálních dnů (seřazený)
     signal_dates = pd.DatetimeIndex(list(pred_by_signal.groups.keys())).sort_values()
-    # Sledujeme, které (sig_day, instrument) už byly otevřeny
-    opened_signal_pairs = set()
 
     # === Denní plánovač pro otevřené pozice ===
     # active_schedule[date] -> seznam indexů v listu `positions`, které je třeba dnes zpracovat
@@ -908,11 +947,38 @@ def main():
 
     log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names}")
 
-    # 4) CV trénink (pro získání rozumné inicializace a sanity checku)
-    model_cv, mu_cv, sigma_cv, cv_histories, cv_best_hist = cv_train_lstm(X_dev, y_dev, dates_dev)
+    # 4) GRID SEARCH TUNING – NO FALLBACKS (params chosen ONLY from search_space)
+    tune_cfg = HYPERPARAMS['model']['tuning']
+    assert tune_cfg['enabled'] is True, "Tuning must be enabled for this script."
+    search_space = tune_cfg['search_space']
+    for k in REQUIRED_TUNED_KEYS:
+        if k not in search_space or not isinstance(search_space[k], (list, tuple)) or len(search_space[k]) == 0:
+            raise ValueError(f"Search space for '{k}' is missing or empty. Provide explicit candidates – no defaults.")
 
-    # 5) Finální trénink na celém developmentu
-    model, mu_final, sigma_final, final_hist = final_train_lstm(X_dev, y_dev)
+    best_score = np.inf
+    best_hp = None
+    all_results = []
+
+    for cand in make_param_grid(search_space):
+        # Merge candidate with fixed training controls
+        cand_hp = {**HYPERPARAMS['model'], **cand}
+        mean_val_loss, _ = cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=cand_hp)
+        all_results.append({**cand, 'mean_val_loss': mean_val_loss})
+        if mean_val_loss < best_score:
+            best_score = mean_val_loss
+            best_hp = cand
+
+    # Report grid results sorted by score
+    res_df = pd.DataFrame(all_results).sort_values('mean_val_loss')
+    log("=== GRID SEARCH RESULTS (ascending by mean val_loss) ===")
+    for _, r in res_df.iterrows():
+        hp_str = format_hp_short(r)
+        log(f"  {hp_str:<48} | mean_val_loss = {r['mean_val_loss']:.6f}")
+    best_hp_str = format_hp_short(best_hp)
+    log(f"=> BEST: {best_hp_str:<48} | mean_val_loss = {best_score:.6f}")
+
+    # 5) Finální trénink na celém developmentu s best_hp
+    model, mu_final, sigma_final, final_hist = final_train_lstm(X_dev, y_dev, best_hp)
 
     # 6) Predikce na dev i test
     log("Predikuji na development a test setu...")
@@ -1101,8 +1167,8 @@ def main():
     hp_s = HYPERPARAMS['strategy']
 
     log("--- CONFIG ---")
-    log(f"Model: LSTM units={hp_m['lstm_units']}, Dense units={hp_m['dense_units']}, optimizer={hp_m['optimizer']}, loss={hp_m['loss']}, batch_size={hp_m['batch_size']}")
-    log(f"Trénink: k_folds={hp_m['k_folds']}, CV_epochs={hp_m['CV_epochs']}, final_epochs={hp_m['final_epochs']}, early_stopping_patience={hp_m['early_stopping_patience']}, keras_verbose={hp_m.get('keras_verbose', 1)}")
+    log(f"Selected (tuned): {format_hp_short({**best_hp})}")
+    log(f"Training controls: k_folds={HYPERPARAMS['model']['k_folds']}, CV_epochs={HYPERPARAMS['model']['CV_epochs']}, final_epochs={HYPERPARAMS['model']['final_epochs']}, ES_patience={HYPERPARAMS['model']['early_stopping_patience']}, keras_verbose={HYPERPARAMS['model'].get('keras_verbose', 1)}")
     log(f"Features: window(h)={hp_f['window']}, RSI={hp_f['use_RSI']}(p={hp_f['rsi_period']}), CCI={hp_f['use_CCI']}(p={hp_f['cci_period']}), STOCH={hp_f['use_STOCH']}(p={hp_f['stoch_period']})")
     log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
 
