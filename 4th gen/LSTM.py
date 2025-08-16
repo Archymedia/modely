@@ -404,7 +404,7 @@ def standardize_with(X, mu, sigma):
     return (X - mu) / sigma
 
 # ---- Enforce tuned hyperparams are always provided ----
-REQUIRED_TUNED_KEYS = ['lstm_units','dense_units','learning_rate','batch_size','l2']
+REQUIRED_TUNED_KEYS = ['lstm_units','dense_units','l2']
 
 def _require_tuned(hp):
     missing = [k for k in REQUIRED_TUNED_KEYS if k not in hp]
@@ -492,7 +492,9 @@ def make_param_grid(search_space):
         yield dict(zip(keys, combo))
 
 def format_hp_short(hp):
-    return f"LSTM={hp['lstm_units']}, Dense={hp['dense_units']}, lr={hp['learning_rate']}, bs={hp['batch_size']}, l2={hp['l2']}"
+    base = HYPERPARAMS['model']
+    get = lambda k: hp[k] if k in hp else base.get(k)
+    return f"LSTM={get('lstm_units')}, Dense={get('dense_units')}, lr={get('learning_rate')}, bs={get('batch_size')}, l2={get('l2')}"
 
 def final_train_lstm(X_dev, y_dev, best_hp):
     """Final training on the full development set with the selected hyperparameters."""
