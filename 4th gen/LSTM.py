@@ -869,8 +869,6 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.plot(strat_cum.index, strat_cum.values, label='Strategy (cum)')
     ax1.plot(bench_cum.index, bench_cum.values, label='Benchmark (cum)')
-    if hedged_cum_full is not None:
-        ax1.plot(hedged_cum_full.index, hedged_cum_full.values, label='Hedged (cum)')
     # vertical line at test start with annotation
     ts = pd.to_datetime(test_start_date)
     ax1.axvline(ts, linestyle='--')
@@ -943,7 +941,7 @@ def main():
     X_dev, y_dev, dates_dev, ids_dev, idcont_dev, meta_dev = stack_Xy(dev)
     X_test, y_test, dates_test, ids_test, idcont_test, meta_test = stack_Xy(test)
 
-    log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names + ['VIX_CHG']}")
+    log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names}")
 
     # 4) CV trénink (pro získání rozumné inicializace a sanity checku)
     model_cv, mu_cv, sigma_cv, cv_histories, cv_best_hist = cv_train_lstm(X_dev, y_dev, dates_dev)
@@ -985,6 +983,10 @@ def main():
     ohlc_map = make_ohlc_map(df)
     benchmark = compute_benchmark(df)  # denní benchmark přes celé období
 
+    # Připrav časové hranice dopředu (budeme je brzy potřebovat)
+    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
+    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+
     # 9) Strategie (M2M, bariéry) — SPOUŠTÍME JEDNOU NA CELÉ OBDOBÍ (bez resetu pozic)
     # Nejprve spojíme predikce z dev i test do jednoho DataFrame
     pred_all_df = pd.concat([pred_dev_df, pred_test_df], ignore_index=True).sort_values(['date_t','pred'], ascending=[True, False])
@@ -998,9 +1000,20 @@ def main():
         phase='full'
     )
 
+    # Test-only strategy (fresh start at test_start): rebased panel wants new portfolio from zero
+    ohlc_map_test = {}
+    for idc, g in ohlc_map.items():
+        gg = g[g['Date'] >= test_start].reset_index(drop=True)
+        if not gg.empty:
+            ohlc_map_test[idc] = gg
+    pnl_test_rebased, trades_test_rebased = run_strategy(
+        pred_test_df, ohlc_map_test, np.unique(pred_test_df['date_t']),
+        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
+        phase='test_rebased'
+    )
+
     # Vyřízneme části pro výpočet metrik
-    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
-    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
     pnl_dev = pnl_all[pnl_all.index <= train_end]
     pnl_test = pnl_all[pnl_all.index >= test_start]
 
@@ -1015,6 +1028,17 @@ def main():
     # 10) Vyhodnocení (Sharpe)
     sr_pd_dev, sr_pa_dev = sharpe_ratio(pnl_dev)
     sr_pd_test, sr_pa_test = sharpe_ratio(pnl_test)
+    # Sharpe pro FRESH test-only běh (vedle full-test perspektivy)
+    sr_pd_test_fresh, sr_pa_test_fresh = sharpe_ratio(pnl_test_rebased)
+
+    # Další metriky pro FRESH test-only běh
+    cum_te_fresh = cumulative_return(pnl_test_rebased)
+    ann_te_fresh = annualized_return(pnl_test_rebased)
+    vola_te_fresh = annual_volatility(pnl_test_rebased)
+    mdd_te_fresh = max_drawdown(pnl_test_rebased)
+
+    # Trade metriky i pro fresh test-only běh
+    tm_te_fresh = trade_metrics_from_trades(trades_test_rebased)
 
     log(f"Sharpe_pd (dev) = {sr_pd_dev:.4f}, Sharpe_pa (dev) = {sr_pa_dev:.4f}")
     log(f"Sharpe_pd (test) = {sr_pd_test:.4f}, Sharpe_pa (test) = {sr_pa_test:.4f}")
@@ -1054,11 +1078,12 @@ def main():
     log(f"  avg_holding_days {tm_tr['avg_holding_days']:.2f} | {tm_te['avg_holding_days']:.2f}")
     log(f"  pt_hit_pct       {tm_tr['pt_hit_pct']:.4f} | {tm_te['pt_hit_pct']:.4f}")
     log(f"  sl_hit_pct       {tm_tr['sl_hit_pct']:.4f} | {tm_te['sl_hit_pct']:.4f}")
+    log(f"  (test_fresh)     win_rate {tm_te_fresh['win_rate']:.4f}, profit_factor {tm_te_fresh['profit_factor']:.4f}, avg_holding_days {tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct {tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct {tm_te_fresh['sl_hit_pct']:.4f}")
 
     # 11) Realizovaná alfa (na test sample)
-    # Sladíme benchmark s horizontem pnl_test (jejich průnik indexů)
-    bench_test = benchmark.reindex(pnl_test.index).fillna(0.0)
-    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test, bench_test)
+    # Sladíme benchmark s horizontem FRESH test-only běhu (pnl_test_rebased)
+    bench_test = benchmark.reindex(pnl_test_rebased.index).fillna(0.0)
+    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test_rebased, bench_test)
     log("Realizovaná alfa/beta (Test)")
     log(f"  alpha_daily {alpha:.8f}")
     log(f"  alpha_t     {alpha_t:.2f}   alpha_p {alpha_p:.4f}")
@@ -1066,15 +1091,15 @@ def main():
     log(f"  beta_t      {beta_t:.2f}   beta_p  {beta_p:.4f}")
     log(f"  r2          {r2_reg:.4f}")
 
-    # Hedged varianta: return_hedged(t) = return_strategy(t) - beta * return_benchmark(t)
-    hedged_ret = pnl_test - beta * bench_test
-    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret)
+    # Hedged varianta – počítej z rebased test běhu pro panel 2 (panel 1 hedged neukazujeme)
+    hedged_ret_test = pnl_test_rebased - beta * bench_test
+    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret_test)
     log(f"Hedged Sharpe (test): pd={sr_pd_hedged:.4f}, pa={sr_pa_hedged:.4f}")
-    hedged_cum_test = (1.0 + hedged_ret).cumprod() - 1.0
+    hedged_cum_test = (1.0 + hedged_ret_test).cumprod() - 1.0
 
     # 12) Kumulativní výnosy a graf
     strat_cum_full = (1 + pnl_all).cumprod() - 1.0   # Panel 1: nepřerušená křivka
-    strat_cum_test = (1 + pnl_test).cumprod() - 1.0  # Panel 2: rebase na 0 (počítáno od test_start)
+    strat_cum_test = (1 + pnl_test_rebased).cumprod() - 1.0  # Panel 2: rebase na 0 z fresh test-only běhu
     bench_cum = (1 + benchmark).cumprod() - 1.0
 
     # Build test-only panel inputs
@@ -1082,9 +1107,6 @@ def main():
     bench_test = benchmark[benchmark.index >= test_start_dt]
     bench_cum_test = (1.0 + bench_test).cumprod() - 1.0
 
-    # doplň hedged_cum_full z dostupného indexu
-    hedged_cum_full = pd.Series(index=strat_cum_full.index, dtype=float)
-    hedged_cum_full.loc[hedged_cum_test.index] = hedged_cum_test.values
     saved_png = plot_dashboard(
         strat_cum=strat_cum_full,
         bench_cum=bench_cum,
@@ -1093,8 +1115,8 @@ def main():
         bench_cum_test=bench_cum_test,
         final_hist=final_hist,
         out_paths=HYPERPARAMS['output']['png_paths'],
-        hedged_cum_full=hedged_cum_full,
-        hedged_cum_test=hedged_cum_test
+        hedged_cum_full=None,              # panel 1 bez hedged
+        hedged_cum_test=hedged_cum_test    # panel 2 může mít hedged
     )
     if saved_png:
         log(f"Uloženo PNG: {saved_png}")
@@ -1105,23 +1127,36 @@ def main():
     t1 = time.time()
     elapsed = t1 - t0
     log("====== SUMMARY ======")
-    # Vybrané hyperparametry (pro rychlé shrnutí na konci)
+    # Vybrané hyperparametry (rychlé shrnutí)
     hp_m = HYPERPARAMS['model']
     hp_f = HYPERPARAMS['features']
     hp_s = HYPERPARAMS['strategy']
-    log("Vybrané hyperparametry:")
-    log(f"  Model: LSTM units={hp_m['lstm_units']}, Dense units={hp_m['dense_units']}, "
-        f"optimizer={hp_m['optimizer']}, loss={hp_m['loss']}, batch_size={hp_m['batch_size']}")
-    log(f"  Trénink: k_folds={hp_m['k_folds']}, CV_epochs={hp_m['CV_epochs']}, "
-        f"final_epochs={hp_m['final_epochs']}, early_stopping_patience={hp_m['early_stopping_patience']}, "
-        f"keras_verbose={hp_m.get('keras_verbose', 1)}")
-    log(f"  Features: window(h)={hp_f['window']}, RSI={hp_f['use_RSI']}(p={hp_f['rsi_period']}), "
-        f"CCI={hp_f['use_CCI']}(p={hp_f['cci_period']}), STOCH={hp_f['use_STOCH']}(p={hp_f['stoch_period']})")
+
+    log("--- CONFIG ---")
+    log(f"Model: LSTM units={hp_m['lstm_units']}, Dense units={hp_m['dense_units']}, optimizer={hp_m['optimizer']}, loss={hp_m['loss']}, batch_size={hp_m['batch_size']}")
+    log(f"Trénink: k_folds={hp_m['k_folds']}, CV_epochs={hp_m['CV_epochs']}, final_epochs={hp_m['final_epochs']}, early_stopping_patience={hp_m['early_stopping_patience']}, keras_verbose={hp_m.get('keras_verbose', 1)}")
+    log(f"Features: window(h)={hp_f['window']}, RSI={hp_f['use_RSI']}(p={hp_f['rsi_period']}), CCI={hp_f['use_CCI']}(p={hp_f['cci_period']}), STOCH={hp_f['use_STOCH']}(p={hp_f['stoch_period']})")
     log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
-    log(f"Sharpe_dev pd={sr_pd_dev:.4f}, pa={sr_pa_dev:.4f}")
-    log(f"Sharpe_test pd={sr_pd_test:.4f}, pa={sr_pa_test:.4f}")
-    log(f"Alpha_test={alpha:.6f} (t={alpha_t:.2f}, p={alpha_p:.4f}), Beta_test={beta:.4f} (t={beta_t:.2f}, p={beta_p:.4f}), R2={r2_reg:.4f}")
-    log(f"Doba běhu: {elapsed/60:.2f} min")
+
+    log("--- PERFORMANCE (DAILY) ---")
+    log("DEV (full-run up to 2020-12-31):")
+    log(f"  cum={cum_tr:.4f} | ann={ann_tr:.4f} | sharpe_pd={sr_pd_dev:.4f} | sharpe_pa={sr_pa_dev:.4f} | maxdd={mdd_tr:.4f} | vola_ann={vola_tr:.4f}")
+    log("TEST (full-run from 2021-01-01, portfolio continues):")
+    log(f"  cum={cum_te:.4f} | ann={ann_te:.4f} | sharpe_pd={sr_pd_test:.4f} | sharpe_pa={sr_pa_test:.4f} | maxdd={mdd_te:.4f} | vola_ann={vola_te:.4f}")
+    log("TEST FRESH-ONLY (portfolio starts at 0 on 2021-01-01):")
+    log(f"  cum={cum_te_fresh:.4f} | ann={ann_te_fresh:.4f} | sharpe_pd={sr_pd_test_fresh:.4f} | sharpe_pa={sr_pa_test_fresh:.4f} | maxdd={mdd_te_fresh:.4f} | vola_ann={vola_te_fresh:.4f}")
+
+    log("--- TRADES ---")
+    log(f"DEV:   win_rate={tm_tr['win_rate']:.4f}, profit_factor={tm_tr['profit_factor']:.4f}, avg_holding_days={tm_tr['avg_holding_days']:.2f}, pt_hit_pct={tm_tr['pt_hit_pct']:.4f}, sl_hit_pct={tm_tr['sl_hit_pct']:.4f}")
+    log(f"TEST:  win_rate={tm_te['win_rate']:.4f}, profit_factor={tm_te['profit_factor']:.4f}, avg_holding_days={tm_te['avg_holding_days']:.2f}, pt_hit_pct={tm_te['pt_hit_pct']:.4f}, sl_hit_pct={tm_te['sl_hit_pct']:.4f}")
+    log(f"TEST_FRESH:  win_rate={tm_te_fresh['win_rate']:.4f}, profit_factor={tm_te_fresh['profit_factor']:.4f}, avg_holding_days={tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct={tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct={tm_te_fresh['sl_hit_pct']:.4f}")
+
+    log("--- REALIZED ALPHA on TEST (fresh-only) ---")
+    alpha_annual = alpha * 252.0
+    log(f"alpha_daily={alpha:.8f}, alpha_annual={alpha_annual:.4f}, alpha_t={alpha_t:.2f}, alpha_p={alpha_p:.4f}")
+    log(f"beta={beta:.4f}, beta_t={beta_t:.2f}, beta_p={beta_p:.4f}, R2={r2_reg:.4f}")
+
+    log(f"Runtime: {elapsed/60:.2f} min")
 
 if __name__ == "__main__":
     try:
