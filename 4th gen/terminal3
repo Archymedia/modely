@@ -1,26 +1,25 @@
-[2025-08-16 17:16:18] Chyba: TypeError("float() argument must be a string or a real number, not 'Timestamp'")
-Traceback (most recent call last):
-  File "c:\Users\david\Desktop\4th generation\LSTM.py", line 1308, in <module>
-    main()
-  File "c:\Users\david\Desktop\4th generation\LSTM.py", line 1237, in main
-    saved_png = plot_dashboard(
-                ^^^^^^^^^^^^^^^
-  File "c:\Users\david\Desktop\4th generation\LSTM.py", line 947, in plot_dashboard
-    ax1.axvspan(ax1.get_xlim()[0], ts, facecolor='yellow', alpha=0.1)
-  File "c:\Users\david\Desktop\4th generation\venv\Lib\site-packages\matplotlib\axes\_axes.py", line 1041, in axvspan
-    p = mpatches.Polygon(verts, **kwargs)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "c:\Users\david\Desktop\4th generation\venv\Lib\site-packages\matplotlib\patches.py", line 1099, in __init__
-    self.set_xy(xy)
-  File "c:\Users\david\Desktop\4th generation\venv\Lib\site-packages\matplotlib\patches.py", line 1165, in set_xy
-    self._path = Path(xy, closed=self._closed)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "c:\Users\david\Desktop\4th generation\venv\Lib\site-packages\matplotlib\path.py", line 129, in __init__
-    vertices = _to_unmasked_float_array(vertices)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "c:\Users\david\Desktop\4th generation\venv\Lib\site-packages\matplotlib\cbook.py", line 1345, in _to_unmasked_float_array
-    return np.asarray(x, float)
-           ^^^^^^^^^^^^^^^^^^^^
-TypeError: float() argument must be a string or a real number, not 'Timestamp'
-
-(venv) C:\Users\david\Desktop\4th generation>
+Epoch 1/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 0.0017 - val_loss: 5.2752e-04
+Epoch 2/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8815e-04 - val_loss: 5.2523e-04
+Epoch 3/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 4/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 5/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 6/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 7/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 8/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 9/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+[2025-08-16 17:59:25]   Fold 1/2: best val_loss=0.000525
+Epoch 1/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 0.0023 - val_loss: 2.9550e-04
+Epoch 2/10
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2836e-04 - val_loss: 2.8806e-04
+Epoch 3/10
+1861/3261 ━━━━━━━━━━━━━━━━━━━━ 6s 4ms/step - loss: 5.6901e-04 
