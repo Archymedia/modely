@@ -17,23 +17,22 @@ LSTM pipeline pro SP100 (2005-2023) s VIX, M2M PnL a bariérami ±2 %.
 
 Poznámky:
 - TensorFlow 2.17 (tensorflow-macos) + tensorflow-metal 1.3 funguje s tímto kódem.
-- Kód je paměťově úsporný, ale i tak může trvat déle (hodně sekvencí).
 """
 
 import os
 import sys
 import time
-from datetime import datetime, timedelta
-
 import numpy as np
 import pandas as pd
-
-from sklearn.metrics import mean_squared_error
-
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import itertools
+
+from datetime import datetime, timedelta
+from sklearn.metrics import mean_squared_error
 from tensorflow.keras import layers, models, callbacks, optimizers
+from matplotlib.gridspec import GridSpec
 
 # =========================
 # ====== HYPERPARAMS ======
@@ -73,19 +72,20 @@ HYPERPARAMS = {
         'CV_epochs': 10,          # epochs per fold during tuning (edit as needed)
         'final_epochs': 10,       # epochs for final training on full development
         'early_stopping_patience': 5,
-        'k_folds': 3,
+        'k_folds': 2,
         'keras_verbose': 1,
         'seed': 42,
         # Fixed (NOT tuned)
         'dropout_rate': 0.2,
+        'learning_rate': 0.001,
+        'batch_size': 64,
+
         # Tuning config – NO FALLBACKS: values are chosen ONLY from this search space
         'tuning': {
             'enabled': True,
             'search_space': {
                 'lstm_units': [64, 128],
                 'dense_units': [64, 128],
-                'learning_rate': [0.0001, 0.0003, 0.001],
-                'batch_size': [32, 64],
                 'l2': [0.0001, 0.001]
             },
             'scoring': 'val_loss',   # minimized
@@ -484,7 +484,6 @@ def cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=None):
     log(f"=> mean best val_loss across folds: {mean_best:.6f}")
     return mean_best, histories
 
-import itertools
 
 def make_param_grid(search_space):
     keys = list(search_space.keys())
@@ -845,7 +844,7 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     plt.legend()
     plt.title(title)
     plt.xlabel('Date')
-    plt.ylabel('Cumulative Return')
+    plt.ylabel('Cumulative Return (%)')
     plt.grid(True)
 
     saved = None
@@ -860,10 +859,74 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     plt.close()
     return saved
 
+# ---- Extra saving helpers ----
+
+def _derive_sibling_paths(base_paths, new_filename):
+    out = []
+    for p in base_paths:
+        try:
+            folder = os.path.dirname(p)
+            out.append(os.path.join(folder, new_filename))
+        except Exception:
+            continue
+    return out
+
+
+def save_loss_curve(final_hist, out_paths):
+    """Save standalone loss vs epochs PNG (no grid, aspect similar to provided example)."""
+    if final_hist is None or 'loss' not in final_hist:
+        return None
+    plt.figure(figsize=(8, 6))  # roughly like the example proportions
+    epochs = range(1, len(final_hist['loss']) + 1)
+    plt.plot(epochs, final_hist['loss'], label='train')
+    if 'val_loss' in final_hist:
+        plt.plot(epochs, final_hist['val_loss'], label='test')
+    plt.title('model loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.legend(loc='best')
+    # explicitly NO grid
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close()
+    return saved
+
+
+def save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, out_paths):
+    """Save a wide standalone test-only cumulative returns panel for thesis layout."""
+    plt.figure(figsize=(16, 6))  # wider for academic page width
+    plt.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy')
+    plt.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark')
+    if hedged_cum_test is not None:
+        plt.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged')
+    plt.title('Test Period – Cumulative Returns')
+    plt.xlabel('Date')
+    plt.ylabel('Cumulative Return')
+    plt.legend(loc='best')
+    plt.grid(True, color='gray', alpha=0.3)
+
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close()
+    return saved
+
 # =========================
 # ======= DASHBOARD =======
 # =========================
-from matplotlib.gridspec import GridSpec
 
 def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_cum_test, final_hist, out_paths, hedged_cum_full=None, hedged_cum_test=None):
     fig = plt.figure(figsize=(12, 10))
@@ -876,26 +939,30 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     # vertical line at test start with annotation
     ts = pd.to_datetime(test_start_date)
     ax1.axvline(ts, linestyle='--')
-    # popisek vertikální čáry
+    # Shade the background to the right of the test start line (test period)
+    ax1.axvspan(ts, ax1.get_xlim()[1], facecolor='yellow', alpha=0.1)
+    # popisek vertikální čáry posunutý dolů (na spodek grafu) a formátovaný jako 1.1.2021
     ylim = ax1.get_ylim()
-    ax1.annotate(f"Test start ({ts.date()})", xy=(ts, ylim[1]), xytext=(5, -10),
-                 textcoords='offset points', rotation=90, va='top', ha='left', fontsize=8, color='gray')
+    ax1.annotate(ts.strftime("%d.%m.%Y"), xy=(ts, ylim[0]), xytext=(5, 10),
+                 textcoords='offset points', rotation=90, va='bottom', ha='left', fontsize=8, color='gray')
     ax1.legend()
     ax1.set_title("LSTM Strategy vs. Benchmark (Cumulative Returns)")
     ax1.set_xlabel("Date")
-    ax1.set_ylabel("Cumulative Return")
+    ax1.set_ylabel("Cumulative Return (%)")
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y*100:.0f}"))
     ax1.grid(True)
 
     # 2) Test-only panel
     ax2 = fig.add_subplot(gs[1, 0])
     # Vstupem je již kumulativní křivka od startu testu, začínající na 0
-    ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy (test, rebased to 0)')
-    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark (test, rebased to 0)')
+    ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy')
+    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark')
     if hedged_cum_test is not None:
-        ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged (test, rebased to 0)')
-    ax2.set_title("Test Period (Strategy rebased to 0)")
+        ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged')
+    ax2.set_title("Test Period")
     ax2.set_xlabel("Date")
-    ax2.set_ylabel("Cum Return")
+    ax2.set_ylabel("Cumulative Return (%)")
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y*100:.0f}"))
     ax2.grid(True)
     ax2.legend()
 
@@ -1031,7 +1098,7 @@ def main():
         phase='full'
     )
 
-    # Test-only strategy (fresh start at test_start): rebased panel wants new portfolio from zero
+    # Test-only strategy = new portfolio from zero
     ohlc_map_test = {}
     for idc, g in ohlc_map.items():
         gg = g[g['Date'] >= test_start].reset_index(drop=True)
@@ -1156,6 +1223,23 @@ def main():
         log(f"Uloženo PNG: {saved_png}")
     else:
         log("Nepodařilo se uložit PNG (zkontroluj cesty v HYPERPARAMS['output']['png_paths']).")
+
+    # === EXTRA EXPORTS: standalone TEST panel and LOSS curve ===
+    base_paths = HYPERPARAMS['output']['png_paths']
+    loss_paths = _derive_sibling_paths(base_paths, "LSTM_loss_curve.png")
+    test_paths = _derive_sibling_paths(base_paths, "LSTM_test_panel.png")
+
+    saved_loss = save_loss_curve(final_hist, loss_paths)
+    if saved_loss:
+        log(f"Uloženo PNG (loss): {saved_loss}")
+    else:
+        log("Nepodařilo se uložit loss graf.")
+
+    saved_test = save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, test_paths)
+    if saved_test:
+        log(f"Uloženo PNG (test panel): {saved_test}")
+    else:
+        log("Nepodařilo se uložit test panel graf.")
 
     # 13) Finální summary
     t1 = time.time()
