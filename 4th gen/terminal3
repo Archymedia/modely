@@ -1,25 +1,1392 @@
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 0.0017 - val_loss: 5.2752e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8815e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 4/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 5/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 6/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 7/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 8/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 9/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-[2025-08-16 17:59:25]   Fold 1/2: best val_loss=0.000525
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 0.0023 - val_loss: 2.9550e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2836e-04 - val_loss: 2.8806e-04
-Epoch 3/10
-1861/3261 ━━━━━━━━━━━━━━━━━━━━ 6s 4ms/step - loss: 5.6901e-04 
+# -*- coding: utf-8 -*-
+"""
+LSTM pipeline pro SP100 (2005-2023) s VIX, M2M PnL a bariérami ±2 %.
+
+- Příprava IDContIndex podle pravidla: P2 + OR((A3<>A2), (D3>(D2+20)))
+- Tvorba subsekvencí (okno h) pro LSTM (returns, close norm, high/low rel, open ratio, volume norm)
+- TA indikátory (RSI, CCI, Stochastic %K)
+- VIX subsekvence (VIX_Change)
+- Split: Development (<= 2020-12-31), Test (>= 2021-01-01)
+- k-fold time-based CV na Developmentu (anti-leak na normalizaci: mu/sigma jen z train části; `k_folds` nastavíš v HYPERPARAMS)
+- LSTM: 64 LSTM -> 64 Dense, Adam, batch 64, EarlyStopping patience 10
+- Signály v t → vstup na t+1 OpenAdj, držení do bariéry ±2 % (SL prioritní, pak TP)
+- M2M PnL: denní přeceňování všech otevřených pozic
+- Benchmark: equal-weighted průměr SimpleReturn napříč dostupnými tickery daného dne
+- Realizovaná alfa na test sample (OLS: strategy ~ alpha + beta*benchmark)
+- Graf kumulativních výnosů (strategie vs. benchmark) a uložení PNG
+
+Poznámky:
+- TensorFlow 2.17 (tensorflow-macos) + tensorflow-metal 1.3 funguje s tímto kódem.
+"""
+
+import os
+import sys
+import time
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import tensorflow as tf
+import itertools
+
+from datetime import datetime, timedelta
+from sklearn.metrics import mean_squared_error
+from tensorflow.keras import layers, models, callbacks, optimizers
+from matplotlib.gridspec import GridSpec
+
+# =========================
+# ====== HYPERPARAMS ======
+# =========================
+
+HYPERPARAMS = {
+    'data': {
+        # Použij nejprve Mac cestu, pokud neexistuje, použij Windows; fallback /mnt/data
+        'data_paths': [
+            "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/9DATA_FINAL.csv",
+            r"C:\Users\david\Desktop\SP100\9DATA_FINAL.csv",
+            "/mnt/data/9DATA_FINAL.csv",
+        ],
+        'vix_paths': [
+            "/Users/lindawaisova/Desktop/DP/data/SP_100/READY_DATA/VIX_2005_2023.csv",
+            r"C:\Users\david\Desktop\SP100\VIX_2005_2023.csv",
+            "/mnt/data/VIX_2005_2023.csv",
+        ],
+        'train_end_date': '2020-12-31',
+        'test_start_date': '2021-01-01',
+        'date_col': 'Date',
+        'id_col': 'ID',
+        'id_cont_col': 'IDContIndex',
+        'ric_col': 'RIC',
+    },
+    'features': {
+        'window': 15,             # h (délka subsekvence)
+        'use_RSI': True,
+        'use_CCI': True,
+        'use_STOCH': True,
+        'rsi_period': 14,
+        'cci_period': 20,
+        'stoch_period': 14
+    },
+    'model': {
+        # Fixed training controls
+        'CV_epochs': 8,          # epochs per fold during tuning 
+        'final_epochs': 25,       # epochs for final training on full development
+        'early_stopping_patience': 5,
+        'k_folds': 2,
+        'keras_verbose': 1,
+        'seed': 42,
+
+        # Fixed (NOT tuned)
+        'dropout_rate': 0.1,
+        'learning_rate': 0.001,
+        'batch_size': 64,
+
+        # Tuning config
+        'tuning': {
+            'enabled': True,
+            'search_space': {
+                'lstm_units': [64, 128],
+                'dense_units': [64, 128],
+                'l2': [0, 0.0001]
+            },
+            'scoring': 'val_loss',   # minimized
+        },
+        'optimizer': 'adam',
+        'loss': 'mse'
+    },
+    'strategy': {
+        'top_n': 10,
+        'bottom_n': 10,
+        'tp': 0.02,      # +2 %
+        'sl': -0.02,     # -2 %
+        'priority': 'SL_first',  # pokud High i Low zasáhnou v jednom dni: nejdřív SL, pak TP
+        'engine': 'exact_cached',  # rychlejší přístup k datům (keše indexů/NumPy)
+    },
+    'output': {
+        'png_paths': [
+            "/Users/lindawaisova/Desktop/DP/4th generation/LSTM_dashboard.png",
+            r"C:\Users\david\Desktop\4th generation\LSTM_dashboard.png",
+            os.path.join(os.getcwd(), "LSTM_dashboard.png"),
+        ]
+    }
+}
+
+np.random.seed(HYPERPARAMS['model']['seed'])
+tf.random.set_seed(HYPERPARAMS['model']['seed'])
+
+# =========================
+# ====== UTIL FUNCS =======
+# =========================
+
+def log(msg: str):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] {msg}")
+    sys.stdout.flush()
+
+def find_first_existing(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return paths[-1]
+
+def load_data():
+    cfg = HYPERPARAMS['data']
+    data_path = find_first_existing(cfg['data_paths'])
+    vix_path = find_first_existing(cfg['vix_paths'])
+    log(f"Načítám SP100 data: {data_path}")
+    df = pd.read_csv(data_path)
+    log(f"Načítám VIX data: {vix_path}")
+    vix = pd.read_csv(vix_path)
+
+    # Parsování dat
+    df[cfg['date_col']] = pd.to_datetime(df[cfg['date_col']])
+    vix['Date'] = pd.to_datetime(vix['Date'])
+
+    # Seřaď podle ID a data
+    df.sort_values([cfg['id_col'], cfg['date_col']], inplace=True)
+    vix.sort_values(['Date'], inplace=True)
+    vix = vix[['Date', 'VIX_Change']].copy()
+    return df, vix
+
+def compute_IDContIndex(df: pd.DataFrame):
+    """ Implementace: P3 = P2 + OR((A3<>A2), (D3 > D2+20)), kde:
+        A = ID, D = Date, P = IDContIndex (1-based; zde vytvoříme 0-based a pak posuneme na 1-based)
+    """
+    cfg = HYPERPARAMS['data']
+    id_col, date_col = cfg['id_col'], cfg['date_col']
+
+    log("Vypočítávám IDContIndex (kontinuální periody členství v indexu)...")
+    df = df.copy()
+    df['__id_shift'] = df[id_col].shift(1)
+    df['__date_shift'] = df[date_col].shift(1)
+    # Nový segment startuje, když se změní ID nebo mezera > 20 dní
+    new_segment = (df[id_col] != df['__id_shift']) | ((df[date_col] - df['__date_shift']).dt.days > 20)
+    # kumulativní součet nových segmentů per ID "resetuje" až když se ID změní;
+    # proto to uděláme globálně a pak přemapujeme v rámci každého ID zvlášť.
+    # Jednodušeji: uděláme groupby dle ID a v něm kumulativní sumu new_segment.
+    df['segment'] = new_segment.groupby(df[id_col]).cumsum()
+    # Aby byla IDContIndex unikátní napříč ID, zkombinujeme (ID, segment) do běžícího čítače:
+    # ale pro jednodušší práci zachováme sloupec jako "lokální" index per ID a segment:
+    # Požadavek říká "Proměnná IDContIndex nahrazuje ID akcie." — stačí (ID, segment) → jedinečná kombinace.
+    # Uděláme číselný index přes kategorizaci.
+    df['IDContIndex'] = pd.Categorical(df[id_col].astype(str) + '_' + df['segment'].astype(str)).codes
+    # Úklid
+    df.drop(columns=['__id_shift', '__date_shift', 'segment'], inplace=True)
+    return df
+
+# ----- TA indikátory -----
+
+def rsi(series: pd.Series, period: int = 14):
+    delta = series.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / (avg_loss.replace(0, np.nan))
+    r = 100 - (100 / (1 + rs))
+    return r.fillna(0.0)
+
+def cci(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 20):
+    tp = (high + low + close) / 3.0
+    ma = tp.rolling(period).mean()
+    md = (tp - ma).abs().rolling(period).mean()
+    c = (tp - ma) / (0.015 * md)
+    return c.fillna(0.0)
+
+def stochastic_k(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
+    lowest_low = low.rolling(period).min()
+    highest_high = high.rolling(period).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    return k.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+# ----- Subsekvence builder -----
+
+def build_sequences_for_group(g: pd.DataFrame, h: int, feat_cfg):
+    """
+    Vytvoří subsekvence pro jednu kontinuální periodu (IDContIndex).
+    Vrací: list of dicts: {'date_t': t_date, 'X': (h, C), 'y': scalar, 'keys': ...}
+    """
+    # Očekávané sloupce:
+    # SimpleReturn, OpenAdj, HighAdj, LowAdj, CloseAdj, VolumeAdj
+    # TA: RSI, CCI, STOCH již spočteno v g
+    needed = ['SimpleReturn','OpenAdj','HighAdj','LowAdj','CloseAdj','VolumeAdj','RSI','CCI','STOCH']
+    for col in needed:
+        if col not in g.columns:
+            g[col] = np.nan
+
+    arr = []
+    g = g.reset_index(drop=True)
+    T = len(g)
+
+    # Pomocné funkce pro subsekvence dle definic
+    def subseq_return(t0, t1):  # inclusive t0..t1
+        return g['SimpleReturn'].iloc[t0:t1+1].values
+
+    def subseq_close_norm(t0, t1):
+        base = g['CloseAdj'].iloc[t0]
+        seq = g['CloseAdj'].iloc[t0:t1+1].values
+        return (seq / base) - 1.0
+
+    def subseq_rel(series_name):
+        # e.g. HighAdj/CloseAdj - 1
+        s = (g[series_name] / g['CloseAdj']) - 1.0
+        return s
+
+    def subseq_open_ratio():
+        # CloseAdj/OpenAdj - 1
+        s = (g['CloseAdj'] / g['OpenAdj']) - 1.0
+        return s
+
+    def subseq_volume_norm(t0, t1):
+        base = g['VolumeAdj'].iloc[t0]
+        seq = g['VolumeAdj'].iloc[t0:t1+1].values
+        return (seq / base) - 1.0
+
+    # Předpočítáme rel a ratio řady pro rychlost
+    rel_high = subseq_rel('HighAdj').values
+    rel_low  = subseq_rel('LowAdj').values
+    open_ratio = subseq_open_ratio().values
+
+    # Pro indexování budeme procházet konce oken t = h-1 .. T-2 (protože y=SimpleReturn(t+1))
+    for t in range(h-1, T-1):
+        t0 = t - (h - 1)
+        t1 = t
+
+        # target(t) = SimpleReturn(t+1)
+        y = g['SimpleReturn'].iloc[t+1]
+        if pd.isna(y):
+            continue  # nelze použít
+
+        # Skládání kanálů: returns, close_norm, high_rel, low_rel, open_ratio, volume_norm, RSI, CCI, STOCH
+        r_seq = subseq_return(t0, t1)
+        c_seq = subseq_close_norm(t0, t1)
+        h_seq = rel_high[t0:t1+1]
+        l_seq = rel_low[t0:t1+1]
+        o_seq = open_ratio[t0:t1+1]
+        v_seq = subseq_volume_norm(t0, t1)
+        rsi_seq = g['RSI'].iloc[t0:t1+1].values if feat_cfg['use_RSI'] else None
+        cci_seq = g['CCI'].iloc[t0:t1+1].values if feat_cfg['use_CCI'] else None
+        sto_seq = g['STOCH'].iloc[t0:t1+1].values if feat_cfg['use_STOCH'] else None
+
+        # Stack kanálů do (h, C)
+        channels = [r_seq, c_seq, h_seq, l_seq, o_seq, v_seq]
+        names = ["RET","CLOSE_N","HIGH_REL","LOW_REL","OPEN_RATIO","VOL_N"]
+        if rsi_seq is not None:
+            channels.append(rsi_seq); names.append("RSI")
+        if cci_seq is not None:
+            channels.append(cci_seq); names.append("CCI")
+        if sto_seq is not None:
+            channels.append(sto_seq); names.append("STOCH")
+
+        X = np.vstack(channels).T  # shape (h, C)
+        # Meta informace pro strategii a pro VIX doplníme později
+        arr.append({
+            'date_t': g['Date'].iloc[t],          # konec okna (signál v t)
+            'idcont': g['IDContIndex'].iloc[t],
+            'id': g['ID'].iloc[t],
+            'ric': g.get('RIC', pd.Series([None])).iloc[t] if 'RIC' in g.columns else None,
+            'X': X,
+            'y': y,
+            'OpenAdj_t1': g['OpenAdj'].iloc[t+1],  # vstupní cena na t+1
+            'HighAdj_t1': g['HighAdj'].iloc[t+1],
+            'LowAdj_t1': g['LowAdj'].iloc[t+1],
+            'CloseAdj_t1': g['CloseAdj'].iloc[t+1],
+            'row_idx_t': t
+        })
+    return arr, names
+
+def attach_vix_sequences(seq_list, vix_df, h):
+    """
+    Ke každé sekvenci doplní kanál VIX_Change subseq [t-h+1..t]
+    Standardizace VIX se bude dělat až při normalizaci (globální mu/sigma z dev-train).
+    """
+    # Precompute dict: date -> rolling window of VIX_Change ending at date
+    vix = vix_df.set_index('Date')['VIX_Change'].sort_index()
+    # Pro rychlost naplníme do Series a budeme si tahat okno per date.
+    for item in seq_list:
+        t_date = item['date_t']
+        t0_date = t_date - timedelta(days=365*10)
+        # Vezmeme posledních h obchodních vix hodnot <= t_date
+        # protože VIX má trading dny, použijeme index slice
+        if t_date not in vix.index:
+            prior_dates = vix.index[vix.index <= t_date]
+            if len(prior_dates) == 0:
+                vix_seq = np.zeros(h)
+                item['X'] = np.hstack([item['X'], vix_seq.reshape(-1,1)])
+                item['feat_names'] = item.get('feat_names', []) + ['VIX_CHG']
+                continue
+            t_date_eff = prior_dates[-1]
+        else:
+            t_date_eff = t_date
+        # okno h hodnot končící v t_date_eff
+        idx_pos = vix.index.get_loc(t_date_eff)
+        start = max(0, idx_pos - (h - 1))
+        window = vix.iloc[start:idx_pos+1].values
+        if len(window) < h:
+            # dopadujeme nulami na začátku (konzervativně)
+            window = np.pad(window, (h - len(window), 0))
+        vix_seq = window[-h:]
+        item['X'] = np.hstack([item['X'], vix_seq.reshape(-1,1)])
+        item['feat_names'] = item.get('feat_names', []) + ['VIX_CHG']
+    return seq_list
+
+def compute_ta_per_idcont(df):
+    feat = HYPERPARAMS['features']
+    log("Počítám TA indikátory (RSI, CCI, Stochastic %K) per IDContIndex...")
+    out = []
+    for _, g in df.groupby('IDContIndex'):
+        g = g.sort_values('Date').copy()
+        if feat['use_RSI']:
+            g['RSI'] = rsi(g['CloseAdj'], feat['rsi_period'])
+        else:
+            g['RSI'] = 0.0
+        if feat['use_CCI']:
+            g['CCI'] = cci(g['HighAdj'], g['LowAdj'], g['CloseAdj'], feat['cci_period'])
+        else:
+            g['CCI'] = 0.0
+        if feat['use_STOCH']:
+            g['STOCH'] = stochastic_k(g['HighAdj'], g['LowAdj'], g['CloseAdj'], feat['stoch_period'])
+        else:
+            g['STOCH'] = 0.0
+        out.append(g)
+    return pd.concat(out, axis=0).sort_values(['IDContIndex','Date']).reset_index(drop=True)
+
+def build_all_sequences(df, vix):
+    h = HYPERPARAMS['features']['window']
+    feat_cfg = HYPERPARAMS['features']
+    log(f"Tvořím subsekvence (okno h={h}) pro všechny kontinuální periody...")
+    all_seqs = []
+    feat_names_ref = None
+    for _, g in df.groupby('IDContIndex'):
+        seqs, feat_names = build_sequences_for_group(g, h, feat_cfg)
+        if feat_names_ref is None:
+            feat_names_ref = feat_names[:]  # základ bez VIX
+        all_seqs.extend(seqs)
+    log(f"Počet subsekvencí (vzorků): {len(all_seqs):,}")
+    # Připojíme VIX subsekvence
+    all_seqs = attach_vix_sequences(all_seqs, vix, h)
+    # finální seznam jmen feature kanálů:
+    feat_names_final = feat_names_ref + ['VIX_CHG']
+    return all_seqs, feat_names_final
+
+def split_dev_test(all_seqs):
+    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
+    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    dev = [s for s in all_seqs if s['date_t'] <= train_end]
+    test = [s for s in all_seqs if s['date_t'] >= test_start]
+    log(f"Split dev/test: dev={len(dev):,} vzorků (<= {train_end.date()}), test={len(test):,} vzorků (>= {test_start.date()})")
+    return dev, test
+
+def stack_Xy(seq_list):
+    X = np.stack([s['X'] for s in seq_list], axis=0)  # (N, h, C)
+    y = np.array([s['y'] for s in seq_list], dtype=float)  # (N)
+    dates = np.array([s['date_t'] for s in seq_list])
+    ids = np.array([s['id'] for s in seq_list])
+    idconts = np.array([s['idcont'] for s in seq_list])
+    meta = {
+        'OpenAdj_t1': np.array([s['OpenAdj_t1'] for s in seq_list]),
+        'HighAdj_t1': np.array([s['HighAdj_t1'] for s in seq_list]),
+        'LowAdj_t1':  np.array([s['LowAdj_t1'] for s in seq_list]),
+        'CloseAdj_t1':np.array([s['CloseAdj_t1'] for s in seq_list]),
+        'RIC': np.array([s['ric'] for s in seq_list], dtype=object)
+    }
+    return X, y, dates, ids, idconts, meta
+
+def compute_mu_sigma(X):
+    # mu,sigma přes všechny akcie a všechny subsekvence – per feature kanál, přes čas i vzorky
+    # X shape: (N, h, C) -> agregujeme přes N a h → (C,)
+    mu = X.reshape(-1, X.shape[-1]).mean(axis=0)
+    sigma = X.reshape(-1, X.shape[-1]).std(axis=0, ddof=1)
+    sigma[sigma == 0] = 1.0
+    return mu, sigma
+
+def standardize_with(X, mu, sigma):
+    return (X - mu) / sigma
+
+# ---- Enforce tuned hyperparams are always provided ----
+REQUIRED_TUNED_KEYS = ['lstm_units','dense_units','l2']
+
+def _require_tuned(hp):
+    missing = [k for k in REQUIRED_TUNED_KEYS if k not in hp]
+    if missing:
+        raise ValueError(f"Missing tuned hyperparameters: {missing}. Tuning has NO defaults; define them in search_space.")
+
+def build_lstm_model(input_shape, hp):
+    from tensorflow.keras import regularizers
+    lr = float(hp['learning_rate'])
+    l2w = float(hp['l2'])
+    du = int(hp['dense_units'])
+    lu = int(hp['lstm_units'])
+    dr = float(hp['dropout_rate'])
+
+    model = models.Sequential([
+        layers.Input(shape=input_shape),
+        layers.LSTM(lu, activation='tanh', dropout=dr, recurrent_dropout=0.0,
+                    kernel_regularizer=regularizers.l2(l2w),
+                    recurrent_regularizer=regularizers.l2(l2w),
+                    bias_regularizer=None),
+        layers.Dense(du, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2w)),
+        layers.Dropout(dr),
+        layers.Dense(1, activation='linear')
+    ])
+    opt = optimizers.Adam(learning_rate=lr)
+    model.compile(optimizer=opt, loss='mse')
+    return model
+
+def cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=None):
+    """Time-based k-fold CV on development set with anti-leak normalization.
+    Returns (mean_best_val_loss, histories_per_fold) for the given hyperparameters.
+    """
+    base = HYPERPARAMS['model'].copy()
+    hp = base if hp_override is None else {**base, **hp_override}
+    _require_tuned(hp)
+    k_folds = int(hp['k_folds'])
+    log(f"CV {k_folds}-fold pro hp={ {k: hp[k] for k in ['lstm_units','dense_units','learning_rate','batch_size','l2']} }")
+
+    N = len(y_dev)
+    order = np.argsort(dates_dev)
+    X_dev = X_dev[order]
+    y_dev = y_dev[order]
+    dates_dev = dates_dev[order]
+
+    folds = np.array_split(np.arange(N), k_folds)
+    val_losses = []
+    histories = []
+
+    for fold_idx in range(k_folds):
+        val_idx = folds[fold_idx]
+        train_idx = np.concatenate([folds[i] for i in range(k_folds) if i != fold_idx])
+
+        X_train, y_train = X_dev[train_idx], y_dev[train_idx]
+        X_val, y_val = X_dev[val_idx], y_dev[val_idx]
+
+        mu, sigma = compute_mu_sigma(X_train)
+        X_train_n = standardize_with(X_train, mu, sigma)
+        X_val_n   = standardize_with(X_val,   mu, sigma)
+
+        model = build_lstm_model(input_shape=X_train_n.shape[1:], hp=hp)
+        es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
+        hist = model.fit(
+            X_train_n, y_train,
+            validation_data=(X_val_n, y_val),
+            epochs=hp['CV_epochs'],
+            batch_size=hp['batch_size'],
+            verbose=hp.get('keras_verbose', 1),
+            callbacks=[es]
+        )
+        histories.append(hist.history)
+        best_val = float(np.min(hist.history['val_loss']))
+        val_losses.append(best_val)
+        log(f"  Fold {fold_idx+1}/{k_folds}: best val_loss={best_val:.6f}")
+
+    mean_best = float(np.mean(val_losses)) if len(val_losses) > 0 else np.inf
+    log(f"=> mean best val_loss across folds: {mean_best:.6f}")
+    return mean_best, histories
+
+
+def make_param_grid(search_space):
+    keys = list(search_space.keys())
+    values = [search_space[k] for k in keys]
+    for combo in itertools.product(*values):
+        yield dict(zip(keys, combo))
+
+def format_hp_short(hp):
+    base = HYPERPARAMS['model']
+    get = lambda k: hp[k] if k in hp else base.get(k)
+    return f"LSTM={get('lstm_units')}, Dense={get('dense_units')}, lr={get('learning_rate')}, bs={get('batch_size')}, l2={get('l2')}"
+
+def final_train_lstm(X_dev, y_dev, best_hp):
+    """Final training on the full development set with the selected hyperparameters."""
+    log("Finální trénink LSTM na celém developmentu s vybranými hyperparametry...")
+    hp = {**HYPERPARAMS['model'], **best_hp}
+    _require_tuned(hp)
+    mu, sigma = compute_mu_sigma(X_dev)
+    X_dev_n = standardize_with(X_dev, mu, sigma)
+
+    model = build_lstm_model(input_shape=X_dev_n.shape[1:], hp=hp)
+    es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
+    hist = model.fit(
+        X_dev_n, y_dev,
+        validation_split=0.1,
+        epochs=hp['final_epochs'],
+        batch_size=hp['batch_size'],
+        verbose=hp.get('keras_verbose', 1),
+        callbacks=[es]
+    )
+    log(f"Finální trénink hotov. Nejlepší val_loss={min(hist.history['val_loss']):.6f}")
+    return model, mu, sigma, hist.history
+
+def predict_with(model, X, mu, sigma):
+    Xn = standardize_with(X, mu, sigma)
+    preds = model.predict(Xn, verbose=HYPERPARAMS['model'].get('keras_verbose', 1)).ravel()
+    return preds
+
+# ----- Benchmark a PnL -----
+
+def compute_benchmark(df):
+    """ Equal-weighted průměrný SimpleReturn napříč všemi akciemi, pro každý den. """
+    log("Počítám benchmark (equal-weighted průměr SimpleReturn napříč tickery)...")
+    bench = df.groupby('Date')['SimpleReturn'].mean().sort_index()
+    return bench
+
+class Position:
+    __slots__ = ("ric","direction","entry_date","entry_price","tp","sl","is_open","last_price","exit_date","exit_price","exit_reason","idx")
+    def __init__(self, ric, direction, entry_date, entry_price, tp, sl):
+        self.ric = ric
+        self.direction = direction  # +1 long, -1 short
+        self.entry_date = entry_date
+        self.entry_price = float(entry_price)
+        self.tp = tp
+        self.sl = sl
+        self.is_open = True
+        self.last_price = entry_price  # pro M2M referenci (Close předchozího dne)
+        self.exit_date = None
+        self.exit_price = None
+        self.exit_reason = None  # 'TP' or 'SL'
+        self.idx = None  # ukazatel na aktuální index v OHLC poli daného instrumentu
+
+    def check_barriers(self, date, high, low, close, priority='SL_first'):
+        """ Kontrola zásahu bariér v 'date'. Pokud zasáhne, nastaví exit a uzavře pozici.
+            Vrať tuple (closed_today: bool, realized_pnl: float pro dnešek). """
+        if not self.is_open:
+            return False, 0.0
+
+        # Bariérové ceny
+        if self.direction == +1:  # long
+            tp_price = self.entry_price * (1 + self.tp)
+            sl_price = self.entry_price * (1 + self.sl)
+            hit_tp = high >= tp_price
+            hit_sl = low <= sl_price
+        else:  # short
+            tp_price = self.entry_price * (1 + self.sl)  # TP při poklesu
+            sl_price = self.entry_price * (1 + self.tp)  # SL při růstu
+            hit_tp = low <= tp_price
+            hit_sl = high >= sl_price
+
+        hit_today = False
+        realized = 0.0
+        if hit_sl and hit_tp:
+            if priority == 'SL_first':
+                exit_price = sl_price; self.exit_reason = 'SL'
+            else:
+                exit_price = tp_price; self.exit_reason = 'TP'
+            self.exit_date = date; self.exit_price = exit_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
+        elif hit_sl:
+            self.exit_reason = 'SL'; self.exit_date = date; self.exit_price = sl_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
+        elif hit_tp:
+            self.exit_reason = 'TP'; self.exit_date = date; self.exit_price = tp_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
+        else:
+            # M2M: bez zásahu
+            realized = (close / self.last_price - 1.0) if self.direction == +1 else (self.last_price / close - 1.0)
+            self.last_price = close
+        return hit_today, realized
+
+def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.02, sl=-0.02, priority='SL_first', phase=None):
+    """
+    pred_df: DataFrame s predikcemi na úrovni (date_t, IDContIndex, pred, entry OpenAdj_{t+1})
+    ohlc_map: dict[IDContIndex] -> DataFrame se sloupci [Date, OpenAdj, HighAdj, LowAdj, CloseAdj] (Sorted)
+    dates_ordered: seřazený list unikátních date_t (signálové dny)
+    Výstup: series denních PnL strategie (equal-weighted across open positions, M2M) a pomocné info
+    """
+    if phase:
+        log(f"Simuluji obchodní strategii ({phase}) s M2M přeceňováním a bariérami ±2 %...")
+    else:
+        log("Simuluji obchodní strategii s M2M přeceňováním a bariérami ±2 %...")
+
+    # --- přístup k datům ---
+    ric_dates = {}
+    ric_ohlc_np = {}
+    for idc, df_idc in ohlc_map.items():
+        dates_arr = pd.DatetimeIndex(df_idc['Date'].values)
+        ric_dates[idc] = dates_arr
+        # OHLC jako NumPy (rychlé čtení)
+        ric_ohlc_np[idc] = df_idc[['OpenAdj','HighAdj','LowAdj','CloseAdj']].to_numpy()
+
+    # Omez kalendář jen na potřebné dny: od (min signálu + 1 den) dál
+    min_signal_date = pd.to_datetime(pred_df['date_t'].min())
+    start_exec_date = (min_signal_date + pd.Timedelta(days=1))
+    all_dates = pd.DatetimeIndex(
+        np.unique(np.concatenate([ric_dates[ric].values for ric in ric_dates]))
+    )
+    all_dates = all_dates[all_dates >= start_exec_date].sort_values()
+    heartbeat_every = 250  # malé heartbeat logování
+
+    positions = []  # otevřené pozice
+    trades = []  # uzavřené obchody pro metriky
+
+    # Mapa: pro každý den vybereme z pred_df nové vstupy, které mají signál včerejška (protože vstup je dnes)
+    pred_by_signal = pred_df.groupby('date_t')
+    # Seznam dostupných signálních dnů (seřazený)
+    signal_dates = pd.DatetimeIndex(list(pred_by_signal.groups.keys())).sort_values()
+
+    # === Denní plánovač pro otevřené pozice ===
+    # active_schedule[date] -> seznam indexů v listu `positions`, které je třeba dnes zpracovat
+    active_schedule = {}
+    # Pro rychlé přidávání do schedule použijeme malou util-funkci
+    def sched_add(day, pos_index):
+        lst = active_schedule.get(day)
+        if lst is None:
+            active_schedule[day] = [pos_index]
+        else:
+            lst.append(pos_index)
+
+    # Předvýběr plánovaných otevření (pro optimalizaci) – deduplikace (long má přednost)
+    planned_openings = {}
+    for sig_day in signal_dates:
+        day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
+        entries = pd.concat([
+            day_preds.head(top_n).assign(direction=+1),
+            day_preds.tail(bottom_n).assign(direction=-1)
+        ], axis=0)
+        seen_idc = set()
+        for _, row in entries.iterrows():
+            idc = row['IDContIndex']
+            if idc in seen_idc:
+                continue  # vynech duplikát (např. současně v top i bottom)
+            seen_idc.add(idc)
+            if idc not in ric_dates:
+                continue
+            dates_arr = ric_dates[idc]
+            target_day = sig_day + timedelta(days=1)
+            ins = dates_arr.searchsorted(target_day)
+            if ins >= len(dates_arr):
+                continue
+            planned_entry_day = dates_arr[ins]
+            planned_openings.setdefault(planned_entry_day, []).append((idc, int(row['direction']), ins))
+
+    daily_pnl_list = []
+    for d in all_dates:
+        # Heartbeat log
+        if len(daily_pnl_list) % heartbeat_every == 0 and len(daily_pnl_list) > 0:
+            log(f"  ...simulace {phase or ''}: zpracováno {len(daily_pnl_list)} dní")
+
+        # 2) Otevři nové pozice podle plánovače
+        if d in planned_openings:
+            for (idc, direction, idx) in planned_openings[d]:
+                o, h, l, c = ric_ohlc_np[idc][idx]
+                entry_price = float(o)
+                pos = Position(ric=idc, direction=direction, entry_date=d,
+                               entry_price=entry_price, tp=tp, sl=sl)
+                pos.last_price = entry_price
+                pos.idx = int(idx)  # nastav ukazatel na dnešní řádek v OHLC
+                positions.append(pos)
+                # zařaď aktuálně otevřenou pozici do dnešního plánu zpracování
+                sched_add(d, len(positions) - 1)
+
+        pnl_today = []
+
+        # Zpracuj pouze ty pozice, které mají DNES obchodní den
+        todays_list = active_schedule.pop(d, None)
+        if todays_list:
+            # abychom byli robustní vůči mazání, projdeme kopii indexů a kontrolujeme, zda je pozice stále otevřená
+            for i in list(todays_list):
+                if i >= len(positions):
+                    continue
+                pos = positions[i]
+                if not pos.is_open or pos.idx is None:
+                    continue
+                idc = pos.ric
+                dates_arr = ric_dates[idc]
+                if pos.idx >= len(dates_arr) or dates_arr[pos.idx] != d:
+                    continue
+                o, h, l, c = ric_ohlc_np[idc][pos.idx]
+                hit_today, realized = pos.check_barriers(
+                    date=d,
+                    high=float(h),
+                    low=float(l),
+                    close=float(c),
+                    priority=priority
+                )
+                pnl_today.append(realized)
+                if hit_today and not pos.is_open:
+                    # uzavřeno – nic dalšího neplánujeme
+                    continue
+                else:
+                    # Naplánuj pozici na další obchodní den instrumentu (pokud existuje)
+                    next_idx = pos.idx + 1
+                    if next_idx < len(dates_arr):
+                        next_day = dates_arr[next_idx]
+                        pos.idx = next_idx
+                        sched_add(next_day, i)
+                    else:
+                        # instrument už nemá další den
+                        pos.idx = next_idx
+
+        # Zaloguj uzavřené obchody za dnešní den (neodstraňuj z listu positions kvůli stabilním indexům)
+        # Projdeme původní todays_list a pokud byla pozice dnes uzavřena, zapíšeme trade.
+        if todays_list:
+            for i in todays_list:
+                if i >= len(positions):
+                    continue
+                pos = positions[i]
+                if not pos.is_open and pos.exit_date == d and pos.exit_price is not None:
+                    trades.append({
+                        'IDContIndex': pos.ric,
+                        'direction': pos.direction,
+                        'entry_date': pos.entry_date,
+                        'exit_date': pos.exit_date,
+                        'holding_days': int((pos.exit_date - pos.entry_date).days) if (pos.exit_date is not None and pos.entry_date is not None) else None,
+                        'entry_price': float(pos.entry_price),
+                        'exit_price': float(pos.exit_price),
+                        'pnl': float((pos.exit_price / pos.entry_price) - 1.0) if (pos.direction == +1) else float((pos.entry_price / pos.exit_price) - 1.0),
+                        'exit_reason': pos.exit_reason
+                    })
+
+        # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi, V M2M portfoliu je počet pozic proměnný;
+        # použijeme equal-weighted průměr z dnešních příspěvků (pokud dnes není žádná pozice → 0).
+        if len(pnl_today) > 0:
+            daily_pnl_list.append((d, float(np.mean(pnl_today))))
+        else:
+            daily_pnl_list.append((d, 0.0))
+
+    pnl_series = pd.Series({d: v for d, v in daily_pnl_list}).sort_index()
+    trades_df = pd.DataFrame(trades)
+    return pnl_series, trades_df
+
+def make_ohlc_map(df):
+    cols = ['Date','OpenAdj','HighAdj','LowAdj','CloseAdj']
+    ohlc_map = {}
+    for idc, g in df.groupby('IDContIndex'):
+        gg = g[cols].dropna().sort_values('Date').reset_index(drop=True)
+        ohlc_map[idc] = gg
+    return ohlc_map
+
+def sharpe_ratio(daily_returns, risk_free=0.0, periods_per_year=252):
+    ex = daily_returns - risk_free/periods_per_year
+    mu = ex.mean()
+    sd = ex.std(ddof=1)
+    if sd == 0 or np.isnan(sd):
+        return 0.0, 0.0
+    sr_pd = mu / sd
+    sr_pa = sr_pd * np.sqrt(periods_per_year)
+    return float(sr_pd), float(sr_pa)
+
+# ---- Utility metric functions ----
+def cumulative_return(daily_returns):
+    if len(daily_returns) == 0:
+        return 0.0
+    return float((1.0 + daily_returns).prod() - 1.0)
+
+def annualized_return(daily_returns, periods_per_year=252):
+    if len(daily_returns) == 0:
+        return 0.0
+    avg = daily_returns.mean()
+    return float(avg * periods_per_year)
+
+def annual_volatility(daily_returns, periods_per_year=252):
+    sd = daily_returns.std(ddof=1)
+    return float(sd * np.sqrt(periods_per_year)) if not np.isnan(sd) else 0.0
+
+def max_drawdown(daily_returns):
+    if len(daily_returns) == 0:
+        return 0.0
+    equity = (1.0 + daily_returns).cumprod()
+    peak = equity.cummax()
+    dd = equity / peak - 1.0
+    return float(dd.min())
+
+def regression_metrics(y_true, y_pred):
+    mse = float(mean_squared_error(y_true, y_pred))
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+    rmse = float(np.sqrt(mse))
+    # R^2
+    ss_res = float(np.sum((y_true - y_pred)**2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true))**2))
+    r2 = float(1 - ss_res/ss_tot) if ss_tot != 0 else 0.0
+    return mse, mae, rmse, r2
+
+def trade_metrics_from_trades(trades_df: pd.DataFrame):
+    if trades_df is None or trades_df.empty:
+        return {
+            'win_rate': np.nan, 'profit_factor': np.nan, 'avg_holding_days': np.nan,
+            'pt_hit_pct': np.nan, 'sl_hit_pct': np.nan
+        }
+    pnl = trades_df['pnl'].dropna()
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0]
+    win_rate = float((pnl > 0).mean()) if len(pnl) > 0 else np.nan
+    profit_factor = float(wins.sum() / abs(losses.sum())) if len(losses) > 0 else np.inf
+    avg_hold = float(trades_df['holding_days'].dropna().mean()) if 'holding_days' in trades_df else np.nan
+    pt_hit = float((trades_df['exit_reason'] == 'TP').mean()) if 'exit_reason' in trades_df else np.nan
+    sl_hit = float((trades_df['exit_reason'] == 'SL').mean()) if 'exit_reason' in trades_df else np.nan
+    return {
+        'win_rate': win_rate,
+        'profit_factor': profit_factor,
+        'avg_holding_days': avg_hold,
+        'pt_hit_pct': pt_hit,
+        'sl_hit_pct': sl_hit
+    }
+
+def realized_alpha(strategy_ret, benchmark_ret):
+    # OLS: strategy = alpha + beta*benchmark + e
+    df = pd.concat([strategy_ret, benchmark_ret], axis=1, keys=['strategy','benchmark']).dropna()
+    if len(df) < 10:
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+    X = sm.add_constant(df['benchmark'].values)
+    y = df['strategy'].values
+    model = sm.OLS(y, X).fit()
+    alpha = float(model.params[0])
+    beta = float(model.params[1])
+    alpha_t = float(model.tvalues[0])
+    beta_t  = float(model.tvalues[1])
+    alpha_p = float(model.pvalues[0])
+    beta_p  = float(model.pvalues[1])
+    r2 = float(model.rsquared)
+    return alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2
+
+
+def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
+    plt.figure(figsize=(11,6))
+    plt.plot(strategy_cum.index, strategy_cum.values, label='Strategy (cum)')
+    plt.plot(benchmark_cum.index, benchmark_cum.values, label='Benchmark (cum)')
+    plt.legend()
+    plt.title(title)
+    plt.xlabel('Date')
+    plt.ylabel('Cumulative Return (%)')
+    plt.grid(True)
+
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception as e:
+            continue
+    plt.close()
+    return saved
+
+# ---- terminal tables ----
+
+def _fmt_pct(x):
+    try:
+        return f"{x*100:.2f}%"
+    except Exception:
+        return str(x)
+
+def _fmt_float(x):
+    try:
+        return f"{x:.6f}"
+    except Exception:
+        return str(x)
+
+def _fmt_int(x):
+    try:
+        return f"{int(x)}"
+    except Exception:
+        return str(x)
+
+def _make_table(title, rows):
+    """rows: list of (left_label, value_str)"""
+    left_w = max((len(l) for l, _ in rows), default=0)
+    right_w = max((len(v) for _, v in rows), default=0)
+    total_w = left_w + 2 + right_w
+    bar = "+" + "-" * (total_w + 2) + "+"
+    out = [bar, f"| {title.center(total_w)} |", bar]
+    for l, v in rows:
+        out.append(f"| {l.ljust(left_w)}  {v.rjust(right_w)} |")
+    out.append(bar)
+    return "\n".join(out)
+
+
+def print_test_oos_table(metrics):
+    rows = [
+        ("MSE", _fmt_float(metrics['mse'])),
+        ("RMSE", _fmt_float(metrics['rmse'])),
+        ("MAE", _fmt_float(metrics['mae'])),
+        ("R²", _fmt_float(metrics['r2'])),
+        ("Cum. Return", _fmt_pct(metrics['cum_return'])),
+        ("Annual Return", _fmt_pct(metrics['ann_return'])),
+        ("Sharpe (pd)", _fmt_float(metrics['sharpe_pd'])),
+        ("Sharpe (pa)", _fmt_float(metrics['sharpe_pa'])),
+        ("Ann. Volatility", _fmt_pct(metrics['vola_ann'])),
+        ("Max Drawdown", _fmt_pct(metrics['maxdd'])),
+        ("Alpha (daily)", _fmt_float(metrics['alpha_daily'])),
+        ("Alpha (annual)", _fmt_float(metrics['alpha_annual'])),
+        ("Alpha t-stat", _fmt_float(metrics['alpha_t'])),
+        ("Alpha p-value", _fmt_float(metrics['alpha_p'])),
+        ("Beta", _fmt_float(metrics['beta'])),
+        ("Beta t-stat", _fmt_float(metrics['beta_t'])),
+        ("Beta p-value", _fmt_float(metrics['beta_p'])),
+        ("Regress R²", _fmt_float(metrics['r2_reg'])),
+        ("Hedged Sharpe (pd)", _fmt_float(metrics['hedged_sharpe_pd'])),
+        ("Hedged Sharpe (pa)", _fmt_float(metrics['hedged_sharpe_pa'])),
+        ("Win rate", _fmt_pct(metrics['win_rate'])),
+        ("Profit factor", _fmt_float(metrics['profit_factor'])),
+        ("Avg holding days", _fmt_float(metrics['avg_holding_days'])),
+        ("TP hit %", _fmt_pct(metrics['pt_hit_pct'])),
+        ("SL hit %", _fmt_pct(metrics['sl_hit_pct'])),
+    ]
+    table = _make_table("TEST OOS (rebased from 2021-01-01)", rows)
+    for line in table.splitlines():
+        log(line)
+
+
+def print_dev_table(metrics):
+    rows = [
+        ("MSE", _fmt_float(metrics['mse'])),
+        ("RMSE", _fmt_float(metrics['rmse'])),
+        ("MAE", _fmt_float(metrics['mae'])),
+        ("R²", _fmt_float(metrics['r2'])),
+        ("Cum. Return", _fmt_pct(metrics['cum_return'])),
+        ("Annual Return", _fmt_pct(metrics['ann_return'])),
+        ("Sharpe (pd)", _fmt_float(metrics['sharpe_pd'])),
+        ("Sharpe (pa)", _fmt_float(metrics['sharpe_pa'])),
+        ("Ann. Volatility", _fmt_pct(metrics['vola_ann'])),
+        ("Max Drawdown", _fmt_pct(metrics['maxdd'])),
+    ]
+    table = _make_table("DEVELOPMENT (2005 - 2020)", rows)
+    for line in table.splitlines():
+        log(line)
+
+# ---- Extra saving helpers ----
+
+def _derive_sibling_paths(base_paths, new_filename):
+    out = []
+    for p in base_paths:
+        try:
+            folder = os.path.dirname(p)
+            out.append(os.path.join(folder, new_filename))
+        except Exception:
+            continue
+    return out
+
+
+def save_loss_curve(final_hist, out_paths):
+    """Save standalone loss vs epochs PNG (no grid, aspect similar to provided example)."""
+    if final_hist is None or 'loss' not in final_hist:
+        return None
+    plt.figure(figsize=(8, 6))  # roughly like the example proportions
+    epochs = range(1, len(final_hist['loss']) + 1)
+    plt.plot(epochs, final_hist['loss'], label='train')
+    if 'val_loss' in final_hist:
+        plt.plot(epochs, final_hist['val_loss'], label='test')
+    plt.title('model loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.legend(loc='best')
+    # explicitly NO grid
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close()
+    return saved
+
+
+def save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, out_paths):
+    """Save a wide standalone test-only cumulative returns panel for thesis layout."""
+    plt.figure(figsize=(16, 6))
+    plt.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy')
+    plt.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark')
+    if hedged_cum_test is not None:
+        plt.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged')
+    plt.title('Test Period – Cumulative Returns')
+    plt.xlabel('Date')
+    plt.ylabel('Cumulative Return')
+    plt.legend(loc='best')
+    plt.grid(True, color='gray', alpha=0.3)
+
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            plt.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close()
+    return saved
+
+# === export TEST OOS cumulative strategy series to Excel with CSV fallback ===
+def save_test_oos_excel(strat_cum_test: pd.Series, out_paths):
+    """Save TEST OOS cumulative strategy series to an Excel file.
+    Tries .xlsx first; if that fails (e.g., openpyxl missing), falls back to .csv.
+    Returns the path of the saved file or None.
+    """
+    # Prefer first writable sibling path with .xlsx
+    xlsx_paths = _derive_sibling_paths(out_paths, "LSTM_test_oos_cum.xlsx")
+    csv_paths  = _derive_sibling_paths(out_paths, "LSTM_test_oos_cum.csv")
+
+    df = pd.DataFrame({"Strategy_cum": strat_cum_test.values}, index=pd.DatetimeIndex(strat_cum_test.index))
+    df.index.name = "Date"
+
+    # Try Excel first
+    for p in xlsx_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            # Let pandas choose engine (openpyxl if present)
+            df.to_excel(p, index=True)
+            return p
+        except Exception:
+            continue
+
+    # Fallback to CSV
+    for p in csv_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            df.to_csv(p, index=True)
+            return p
+        except Exception:
+            continue
+    return None
+
+# =========================
+# ======= DASHBOARD =======
+# =========================
+
+def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_cum_test, final_hist, out_paths, hedged_cum_full=None, hedged_cum_test=None):
+    fig = plt.figure(figsize=(12, 10))
+    gs = GridSpec(3, 1, height_ratios=[3.0, 1.8, 1.6], hspace=0.35)
+
+    # 1) Full period cumulative returns
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(strat_cum.index, strat_cum.values, label='Strategy (cum)')
+    ax1.plot(bench_cum.index, bench_cum.values, label='Benchmark (cum)')
+    # vertical line at test start with annotation
+    ts = pd.to_datetime(test_start_date)
+    ax1.axvline(ts, linestyle='--')
+    # Restrict x-axis from 2005 onwards
+    ax1.set_xlim(pd.to_datetime("2005-01-01"), strat_cum.index.max())
+    # Shade the development period (left of test start)
+    # Convert test start date to Matplotlib's numeric date for axvspan to avoid float/Timestamp mix
+    xmin, xmax = ax1.get_xlim()
+    ts_num = mdates.date2num(ts)
+    ax1.axvspan(xmin, ts_num, facecolor='yellow', alpha=0.1)
+    ylim = ax1.get_ylim()
+    ax1.annotate(ts.strftime("%d.%m.%Y"), xy=(ts, ylim[0]), xytext=(5, 10),
+                 textcoords='offset points', rotation=90, va='bottom', ha='left', fontsize=8, color='gray')
+    ax1.legend()
+    ax1.set_title("LSTM Strategy vs. Benchmark (Cumulative Returns)")
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Cumulative Return (%)")
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y*100:.0f}"))
+    ax1.grid(True)
+
+    # 2) Test-only panel
+    ax2 = fig.add_subplot(gs[1, 0])
+    # Vstupem je již kumulativní křivka od startu testu, začínající na 0
+    ax2.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy')
+    ax2.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark')
+    if hedged_cum_test is not None:
+        ax2.plot(hedged_cum_test.index, hedged_cum_test.values, label='Hedged')
+    ax2.set_title("Test Period")
+    ax2.set_xlabel("Date")
+    ax2.set_ylabel("Cumulative Return (%)")
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y*100:.0f}"))
+    ax2.grid(True)
+    ax2.legend()
+
+    # 3) Learning curve – final training
+    ax3 = fig.add_subplot(gs[2, 0])
+    if final_hist is not None and 'loss' in final_hist:
+        ax3.plot(range(1, len(final_hist['loss'])+1), final_hist['loss'], label='Train loss')
+        if 'val_loss' in final_hist:
+            ax3.plot(range(1, len(final_hist['val_loss'])+1), final_hist['val_loss'], label='Val loss')
+    ax3.set_title("Learning Curve – Final Training")
+    ax3.set_xlabel("Epoch")
+    ax3.set_ylabel("Loss")
+    ax3.grid(True)
+    ax3.legend()
+
+    saved = None
+    for p in out_paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            fig.savefig(p, bbox_inches='tight', dpi=150)
+            saved = p
+            break
+        except Exception:
+            continue
+    plt.close(fig)
+    return saved
+
+# =========================
+# ========= MAIN ==========
+# =========================
+
+def main():
+    t0 = time.time()
+    log("Startuji LSTM SP100 pipeline...")
+
+    # 1) Načtení dat + IDContIndex
+    df, vix = load_data()
+    df = compute_IDContIndex(df)
+
+    # 2) TA indikátory per IDContIndex
+    df = compute_ta_per_idcont(df)
+
+    # 3) Stavba subsekvencí a split
+    all_seqs, feat_names = build_all_sequences(df, vix)
+    dev, test = split_dev_test(all_seqs)
+
+    X_dev, y_dev, dates_dev, ids_dev, idcont_dev, meta_dev = stack_Xy(dev)
+    X_test, y_test, dates_test, ids_test, idcont_test, meta_test = stack_Xy(test)
+
+    log(f"Shapes: X_dev={X_dev.shape}, X_test={X_test.shape} ; počet kanálů={X_dev.shape[-1]} ; feat_names={feat_names}")
+
+    # 4) GRID SEARCH TUNING – NO FALLBACKS (params chosen ONLY from search_space)
+    tune_cfg = HYPERPARAMS['model']['tuning']
+    assert tune_cfg['enabled'] is True, "Tuning must be enabled for this script."
+    search_space = tune_cfg['search_space']
+    for k in REQUIRED_TUNED_KEYS:
+        if k not in search_space or not isinstance(search_space[k], (list, tuple)) or len(search_space[k]) == 0:
+            raise ValueError(f"Search space for '{k}' is missing or empty. Provide explicit candidates – no defaults.")
+
+    best_score = np.inf
+    best_hp = None
+    all_results = []
+
+    for cand in make_param_grid(search_space):
+        # Merge candidate with fixed training controls
+        cand_hp = {**HYPERPARAMS['model'], **cand}
+        mean_val_loss, _ = cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=cand_hp)
+        all_results.append({**cand, 'mean_val_loss': mean_val_loss})
+        if mean_val_loss < best_score:
+            best_score = mean_val_loss
+            best_hp = cand
+
+    # Report grid results sorted by score
+    res_df = pd.DataFrame(all_results).sort_values('mean_val_loss')
+    log("=== GRID SEARCH RESULTS (ascending by mean val_loss) ===")
+    for _, r in res_df.iterrows():
+        hp_str = format_hp_short(r)
+        log(f"  {hp_str:<48} | mean_val_loss = {r['mean_val_loss']:.6f}")
+    best_hp_str = format_hp_short(best_hp)
+    log(f"=> BEST: {best_hp_str:<48} | mean_val_loss = {best_score:.6f}")
+
+    # 5) Finální trénink na celém developmentu s best_hp
+    model, mu_final, sigma_final, final_hist = final_train_lstm(X_dev, y_dev, best_hp)
+
+    # 6) Predikce na dev i test
+    log("Predikuji na development a test setu...")
+    preds_dev = predict_with(model, X_dev, mu_final, sigma_final)
+    preds_test = predict_with(model, X_test, mu_final, sigma_final)
+
+    # 7) Sestavení DataFrame s predikcemi (pro strategii)
+    pred_dev_df = pd.DataFrame({
+        'date_t': dates_dev,
+        'IDContIndex': idcont_dev,
+        'RIC': meta_dev['RIC'],
+        'pred': preds_dev,
+        'OpenAdj_t1': meta_dev['OpenAdj_t1'],
+        'HighAdj_t1': meta_dev['HighAdj_t1'],
+        'LowAdj_t1': meta_dev['LowAdj_t1'],
+        'CloseAdj_t1': meta_dev['CloseAdj_t1'],
+        'y_true': y_dev
+    }).sort_values(['date_t','pred'], ascending=[True, False])
+
+    pred_test_df = pd.DataFrame({
+        'date_t': dates_test,
+        'IDContIndex': idcont_test,
+        'RIC': meta_test['RIC'], 
+        'pred': preds_test,
+        'OpenAdj_t1': meta_test['OpenAdj_t1'],
+        'HighAdj_t1': meta_test['HighAdj_t1'],
+        'LowAdj_t1': meta_test['LowAdj_t1'],
+        'CloseAdj_t1': meta_test['CloseAdj_t1'],
+        'y_true': y_test
+    }).sort_values(['date_t','pred'], ascending=[True, False])
+
+    # 8) OHLC map pro strategii a benchmark
+    ohlc_map = make_ohlc_map(df)
+    benchmark = compute_benchmark(df)  # denní benchmark přes celé období
+
+    # Připrav časové hranice dopředu
+    train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
+    test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+
+    # 9) Strategie (M2M, bariéry) — SPOUŠTÍME JEDNOU NA CELÉ OBDOBÍ (bez resetu pozic)
+    # Nejprve spojíme predikce z dev i test do jednoho DataFrame
+    pred_all_df = pd.concat([pred_dev_df, pred_test_df], ignore_index=True).sort_values(['date_t','pred'], ascending=[True, False])
+    all_dates_ordered = np.unique(pred_all_df['date_t'])
+
+    strat_cfg = HYPERPARAMS['strategy']
+    pnl_all, trades_all = run_strategy(
+        pred_all_df, ohlc_map, all_dates_ordered,
+        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
+        phase='full'
+    )
+
+    # Test-only strategy = new portfolio from zero
+    ohlc_map_test = {}
+    for idc, g in ohlc_map.items():
+        gg = g[g['Date'] >= test_start].reset_index(drop=True)
+        if not gg.empty:
+            ohlc_map_test[idc] = gg
+    pnl_test_rebased, trades_test_rebased = run_strategy(
+        pred_test_df, ohlc_map_test, np.unique(pred_test_df['date_t']),
+        top_n=strat_cfg['top_n'], bottom_n=strat_cfg['bottom_n'],
+        tp=strat_cfg['tp'], sl=strat_cfg['sl'], priority=strat_cfg['priority'],
+        phase='test_rebased'
+    )
+
+    # Vyřízneme části pro výpočet metrik
+    pnl_dev = pnl_all[pnl_all.index <= train_end]
+    pnl_test = pnl_all[pnl_all.index >= test_start]
+
+    # Rozdělíme trades pro obchodní metriky
+    if trades_all is not None and not trades_all.empty:
+        trades_dev = trades_all[trades_all['exit_date'] <= train_end]
+        trades_test = trades_all[trades_all['entry_date'] >= test_start]
+    else:
+        trades_dev = trades_all
+        trades_test = trades_all
+
+    # 10) Vyhodnocení (Sharpe)
+    sr_pd_dev, sr_pa_dev = sharpe_ratio(pnl_dev)
+    sr_pd_test, sr_pa_test = sharpe_ratio(pnl_test)
+    # Sharpe pro OUT-OF-SAMPLE test-only běh (vedle full-test perspektivy)
+    sr_pd_test_fresh, sr_pa_test_fresh = sharpe_ratio(pnl_test_rebased)
+
+    # Další metriky pro OUT-OF-SAMPLE test-only běh
+    cum_te_fresh = cumulative_return(pnl_test_rebased)
+    ann_te_fresh = annualized_return(pnl_test_rebased)
+    vola_te_fresh = annual_volatility(pnl_test_rebased)
+    mdd_te_fresh = max_drawdown(pnl_test_rebased)
+
+    # Trade metriky i pro out-of-sample test-only běh
+    tm_te_fresh = trade_metrics_from_trades(trades_test_rebased)
+
+    log(f"Sharpe_pd (dev) = {sr_pd_dev:.4f}, Sharpe_pa (dev) = {sr_pa_dev:.4f}")
+    log(f"Sharpe_pd (test) = {sr_pd_test:.4f}, Sharpe_pa (test) = {sr_pa_test:.4f}")
+
+    # Regresní metriky (Train/Test)
+    mse_tr, mae_tr, rmse_tr, r2_tr = regression_metrics(y_dev, preds_dev)
+    mse_te, mae_te, rmse_te, r2_te = regression_metrics(y_test, preds_test)
+
+    # (Moved up) Realizovaná alfa na TEST (fresh-only) a hedged metriky, aby byly k dispozici pro výpis níže
+    bench_test = benchmark.reindex(pnl_test_rebased.index).fillna(0.0)
+    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test_rebased, bench_test)
+    hedged_ret_test = pnl_test_rebased - beta * bench_test
+    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret_test)
+    hedged_cum_test = (1.0 + hedged_ret_test).cumprod() - 1.0
+
+    # Výnosové metriky (Train/Test)
+    cum_tr = cumulative_return(pnl_dev)
+    cum_te = cumulative_return(pnl_test)
+    ann_tr = annualized_return(pnl_dev)
+    ann_te = annualized_return(pnl_test)
+    vola_tr = annual_volatility(pnl_dev)
+    vola_te = annual_volatility(pnl_test)
+    mdd_tr = max_drawdown(pnl_dev)
+    mdd_te = max_drawdown(pnl_test)
+
+    # Trade metrics for dev/test (for later summary)
+    tm_tr = trade_metrics_from_trades(trades_dev)
+    tm_te = trade_metrics_from_trades(trades_test)
+
+    # === POUZE OUT-OF-SAMPLE TEST PERIOD (Pretty Table) ===
+    test_metrics_tbl = {
+        'mse': mse_te, 'rmse': rmse_te, 'mae': mae_te, 'r2': r2_te,
+        'cum_return': cum_te_fresh, 'ann_return': ann_te_fresh,
+        'sharpe_pd': sr_pd_test_fresh, 'sharpe_pa': sr_pa_test_fresh,
+        'vola_ann': vola_te_fresh, 'maxdd': mdd_te_fresh,
+        'alpha_daily': alpha, 'alpha_annual': alpha * 252.0,
+        'alpha_t': alpha_t, 'alpha_p': alpha_p, 'beta': beta, 'beta_t': beta_t, 'beta_p': beta_p, 'r2_reg': r2_reg,
+        'hedged_sharpe_pd': sr_pd_hedged, 'hedged_sharpe_pa': sr_pa_hedged,
+        'win_rate': tm_te_fresh.get('win_rate', np.nan),
+        'profit_factor': tm_te_fresh.get('profit_factor', np.nan),
+        'avg_holding_days': tm_te_fresh.get('avg_holding_days', np.nan),
+        'pt_hit_pct': tm_te_fresh.get('pt_hit_pct', np.nan),
+        'sl_hit_pct': tm_te_fresh.get('sl_hit_pct', np.nan),
+    }
+    print_test_oos_table(test_metrics_tbl)
+
+    # 12) Kumulativní výnosy a graf
+    strat_cum_full = (1 + pnl_all).cumprod() - 1.0   # Panel 1: nepřerušená křivka
+    strat_cum_test = (1 + pnl_test_rebased).cumprod() - 1.0  # Panel 2: rebase na 0 z fresh test-only běhu
+    bench_cum = (1 + benchmark).cumprod() - 1.0
+
+    # Build test-only panel inputs
+    test_start_dt = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
+    bench_test = benchmark[benchmark.index >= test_start_dt]
+    bench_cum_test = (1.0 + bench_test).cumprod() - 1.0
+
+    saved_png = plot_dashboard(
+        strat_cum=strat_cum_full,
+        bench_cum=bench_cum,
+        test_start_date=HYPERPARAMS['data']['test_start_date'],
+        strat_cum_test=strat_cum_test,
+        bench_cum_test=bench_cum_test,
+        final_hist=final_hist,
+        out_paths=HYPERPARAMS['output']['png_paths'],
+        hedged_cum_full=None,              # panel 1 bez hedged
+        hedged_cum_test=hedged_cum_test    # panel 2 může mít hedged
+    )
+    if saved_png:
+        log(f"Uloženo PNG: {saved_png}")
+    else:
+        log("Nepodařilo se uložit PNG (zkontroluj cesty v HYPERPARAMS['output']['png_paths']).")
+
+    # === EXTRA EXPORTS: standalone TEST panel and LOSS curve ===
+    base_paths = HYPERPARAMS['output']['png_paths']
+    loss_paths = _derive_sibling_paths(base_paths, "LSTM_loss_curve.png")
+    test_paths = _derive_sibling_paths(base_paths, "LSTM_test_panel.png")
+
+    saved_loss = save_loss_curve(final_hist, loss_paths)
+    if saved_loss:
+        log(f"Uloženo PNG (loss): {saved_loss}")
+    else:
+        log("Nepodařilo se uložit loss graf.")
+
+    saved_test = save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, test_paths)
+    if saved_test:
+        log(f"Uloženo PNG (test panel): {saved_test}")
+    else:
+        log("Nepodařilo se uložit test panel graf.")
+
+    # === EXPORT: TEST OOS cumulative strategy to Excel (with CSV fallback) ===
+    saved_xlsx = save_test_oos_excel(strat_cum_test, HYPERPARAMS['output']['png_paths'])
+    if saved_xlsx:
+        log(f"Uloženo TEST OOS cumulative (Excel/CSV): {saved_xlsx}")
+    else:
+        log("Nepodařilo se uložit TEST OOS cumulative do Excel/CSV.")
+
+    # 13) Finální summary
+    t1 = time.time()
+    elapsed = t1 - t0
+    log("====== SUMMARY ======")
+    # Vybrané hyperparametry (rychlé shrnutí)
+    hp_m = HYPERPARAMS['model']
+    hp_f = HYPERPARAMS['features']
+    hp_s = HYPERPARAMS['strategy']
+
+    log("--- CONFIG ---")
+    log(f"Selected (tuned): {format_hp_short({**best_hp})}")
+    log(f"Training controls: k_folds={HYPERPARAMS['model']['k_folds']}, CV_epochs={HYPERPARAMS['model']['CV_epochs']}, final_epochs={HYPERPARAMS['model']['final_epochs']}, ES_patience={HYPERPARAMS['model']['early_stopping_patience']}, keras_verbose={HYPERPARAMS['model'].get('keras_verbose', 1)}")
+    log(f"Features: window(h)={hp_f['window']}, RSI={hp_f['use_RSI']}(p={hp_f['rsi_period']}), CCI={hp_f['use_CCI']}(p={hp_f['cci_period']}), STOCH={hp_f['use_STOCH']}(p={hp_f['stoch_period']})")
+    log(f"Vzorky: dev={len(pred_dev_df):,}, test={len(pred_test_df):,}, okno h={HYPERPARAMS['features']['window']}, kanály={X_dev.shape[-1]}")
+
+    # --- Tidy terminal recap: Only TEST OOS and DEVELOPMENT ---
+    print_test_oos_table(test_metrics_tbl)
+
+    dev_metrics_tbl = {
+        'mse': mse_tr, 'rmse': rmse_tr, 'mae': mae_tr, 'r2': r2_tr,
+        'cum_return': cum_tr, 'ann_return': ann_tr,
+        'sharpe_pd': sr_pd_dev, 'sharpe_pa': sr_pa_dev,
+        'vola_ann': vola_tr, 'maxdd': mdd_tr,
+    }
+    print_dev_table(dev_metrics_tbl)
+
+    log(f"Runtime: {elapsed/60:.2f} min")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        log(f"Chyba: {repr(e)}")
+        raise
