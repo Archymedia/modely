@@ -69,25 +69,28 @@ HYPERPARAMS = {
         'stoch_period': 14
     },
     'model': {
-        # Fixed training controls (not tuned)
-        'CV_epochs': 10,          # epochs per fold during tuning (edit as needed)
-        'final_epochs': 10,       # epochs for final training on full development
-        'early_stopping_patience': 5,
-        'k_folds': 2,
+        # Fixed training controls
+        'CV_epochs': 8,          # epochs per fold during tuning 
+        'final_epochs': 40,       # epochs for final training on full development
+        'early_stopping_patience': 6,
+        'k_folds': 3,
         'keras_verbose': 1,
         'seed': 42,
+
         # Fixed (NOT tuned)
-        'dropout_rate': 0.2,
+        'dropout_rate': 0.1,
         'learning_rate': 0.001,
         'batch_size': 64,
 
-        # Tuning config – NO FALLBACKS: values are chosen ONLY from this search space
+        # Tuning config
         'tuning': {
             'enabled': True,
             'search_space': {
                 'lstm_units': [64, 128],
                 'dense_units': [64, 128],
-                'l2': [0.0001, 0.001]
+                'l2': [0.0, 1e-5, 5e-5, 1e-4],
+                'learning_rate': [0.0003, 0.001],
+                'batch_size': [64, 128]
             },
             'scoring': 'val_loss',   # minimized
         },
@@ -127,7 +130,7 @@ def find_first_existing(paths):
     for p in paths:
         if os.path.exists(p):
             return p
-    return paths[-1]  # poslední jako fallback
+    return paths[-1]
 
 def load_data():
     cfg = HYPERPARAMS['data']
@@ -305,11 +308,10 @@ def attach_vix_sequences(seq_list, vix_df, h):
     # Pro rychlost naplníme do Series a budeme si tahat okno per date.
     for item in seq_list:
         t_date = item['date_t']
-        t0_date = t_date - timedelta(days=365*10)  # nepotřebujeme, jen placeholder
+        t0_date = t_date - timedelta(days=365*10)
         # Vezmeme posledních h obchodních vix hodnot <= t_date
         # protože VIX má trading dny, použijeme index slice
         if t_date not in vix.index:
-            # pokud není přesně tento obchodní den ve VIX (svátky), vezmi nejbližší menší
             prior_dates = vix.index[vix.index <= t_date]
             if len(prior_dates) == 0:
                 vix_seq = np.zeros(h)
@@ -380,7 +382,7 @@ def split_dev_test(all_seqs):
 
 def stack_Xy(seq_list):
     X = np.stack([s['X'] for s in seq_list], axis=0)  # (N, h, C)
-    y = np.array([s['y'] for s in seq_list], dtype=float)  # (N,)
+    y = np.array([s['y'] for s in seq_list], dtype=float)  # (N)
     dates = np.array([s['date_t'] for s in seq_list])
     ids = np.array([s['id'] for s in seq_list])
     idconts = np.array([s['idcont'] for s in seq_list])
@@ -418,7 +420,7 @@ def build_lstm_model(input_shape, hp):
     l2w = float(hp['l2'])
     du = int(hp['dense_units'])
     lu = int(hp['lstm_units'])
-    dr = float(hp['dropout_rate'])  # fixed (not tuned)
+    dr = float(hp['dropout_rate'])
 
     model = models.Sequential([
         layers.Input(shape=input_shape),
@@ -467,7 +469,7 @@ def cv_train_lstm(X_dev, y_dev, dates_dev, hp_override=None):
         X_val_n   = standardize_with(X_val,   mu, sigma)
 
         model = build_lstm_model(input_shape=X_train_n.shape[1:], hp=hp)
-        es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
+        es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], min_delta=1e-6, restore_best_weights=True)
         hist = model.fit(
             X_train_n, y_train,
             validation_data=(X_val_n, y_val),
@@ -506,7 +508,7 @@ def final_train_lstm(X_dev, y_dev, best_hp):
     X_dev_n = standardize_with(X_dev, mu, sigma)
 
     model = build_lstm_model(input_shape=X_dev_n.shape[1:], hp=hp)
-    es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], restore_best_weights=True)
+    es = callbacks.EarlyStopping(monitor='val_loss', patience=hp['early_stopping_patience'], min_delta=1e-6, restore_best_weights=True)
     hist = model.fit(
         X_dev_n, y_dev,
         validation_split=0.1,
@@ -598,7 +600,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
     else:
         log("Simuluji obchodní strategii s M2M přeceňováním a bariérami ±2 %...")
 
-    # --- Rychlejší přístup k datům: keše per RIC ---
+    # --- přístup k datům ---
     ric_dates = {}
     ric_ohlc_np = {}
     for idc, df_idc in ohlc_map.items():
@@ -692,7 +694,6 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
                     continue
                 idc = pos.ric
                 dates_arr = ric_dates[idc]
-                # obrana: pokud z nějakého důvodu nesedí datum, přeskoč (neměl by nastat)
                 if pos.idx >= len(dates_arr) or dates_arr[pos.idx] != d:
                     continue
                 o, h, l, c = ric_ohlc_np[idc][pos.idx]
@@ -715,7 +716,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
                         pos.idx = next_idx
                         sched_add(next_day, i)
                     else:
-                        # instrument už nemá další den – ponecháme bez re‑plánu
+                        # instrument už nemá další den
                         pos.idx = next_idx
 
         # Zaloguj uzavřené obchody za dnešní den (neodstraňuj z listu positions kvůli stabilním indexům)
@@ -738,7 +739,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
                         'exit_reason': pos.exit_reason
                     })
 
-        # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi? V M2M portfoliu je počet pozic proměnný;
+        # Denní PnL je průměr napříč (top_n + bottom_n) pozicemi, V M2M portfoliu je počet pozic proměnný;
         # použijeme equal-weighted průměr z dnešních příspěvků (pokud dnes není žádná pozice → 0).
         if len(pnl_today) > 0:
             daily_pnl_list.append((d, float(np.mean(pnl_today))))
@@ -863,7 +864,7 @@ def plot_and_save(strategy_cum, benchmark_cum, title, out_paths):
     plt.close()
     return saved
 
-# ---- Pretty terminal tables ----
+# ---- terminal tables ----
 
 def _fmt_pct(x):
     try:
@@ -988,7 +989,7 @@ def save_loss_curve(final_hist, out_paths):
 
 def save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, out_paths):
     """Save a wide standalone test-only cumulative returns panel for thesis layout."""
-    plt.figure(figsize=(16, 6))  # wider for academic page width
+    plt.figure(figsize=(16, 6))
     plt.plot(strat_cum_test.index, strat_cum_test.values, label='Strategy')
     plt.plot(bench_cum_test.index, bench_cum_test.values, label='Benchmark')
     if hedged_cum_test is not None:
@@ -1011,7 +1012,7 @@ def save_test_panel(strat_cum_test, bench_cum_test, hedged_cum_test, out_paths):
     plt.close()
     return saved
 
-# === Extra helper: export TEST OOS cumulative strategy series to Excel with CSV fallback ===
+# === export TEST OOS cumulative strategy series to Excel with CSV fallback ===
 def save_test_oos_excel(strat_cum_test: pd.Series, out_paths):
     """Save TEST OOS cumulative strategy series to an Excel file.
     Tries .xlsx first; if that fails (e.g., openpyxl missing), falls back to .csv.
@@ -1066,7 +1067,6 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     xmin, xmax = ax1.get_xlim()
     ts_num = mdates.date2num(ts)
     ax1.axvspan(xmin, ts_num, facecolor='yellow', alpha=0.1)
-    # popisek vertikální čáry posunutý dolů (na spodek grafu) a formátovaný jako 1.1.2021
     ylim = ax1.get_ylim()
     ax1.annotate(ts.strftime("%d.%m.%Y"), xy=(ts, ylim[0]), xytext=(5, 10),
                  textcoords='offset points', rotation=90, va='bottom', ha='left', fontsize=8, color='gray')
@@ -1181,7 +1181,7 @@ def main():
     pred_dev_df = pd.DataFrame({
         'date_t': dates_dev,
         'IDContIndex': idcont_dev,
-        'RIC': meta_dev['RIC'],  # pouze informativně
+        'RIC': meta_dev['RIC'],
         'pred': preds_dev,
         'OpenAdj_t1': meta_dev['OpenAdj_t1'],
         'HighAdj_t1': meta_dev['HighAdj_t1'],
@@ -1193,7 +1193,7 @@ def main():
     pred_test_df = pd.DataFrame({
         'date_t': dates_test,
         'IDContIndex': idcont_test,
-        'RIC': meta_test['RIC'],  # pouze informativně
+        'RIC': meta_test['RIC'], 
         'pred': preds_test,
         'OpenAdj_t1': meta_test['OpenAdj_t1'],
         'HighAdj_t1': meta_test['HighAdj_t1'],
@@ -1206,7 +1206,7 @@ def main():
     ohlc_map = make_ohlc_map(df)
     benchmark = compute_benchmark(df)  # denní benchmark přes celé období
 
-    # Připrav časové hranice dopředu (budeme je brzy potřebovat)
+    # Připrav časové hranice dopředu
     train_end = pd.to_datetime(HYPERPARAMS['data']['train_end_date'])
     test_start = pd.to_datetime(HYPERPARAMS['data']['test_start_date'])
 
@@ -1240,7 +1240,7 @@ def main():
     pnl_dev = pnl_all[pnl_all.index <= train_end]
     pnl_test = pnl_all[pnl_all.index >= test_start]
 
-    # Rozdělíme trades pro obchodní metriky (volitelně)
+    # Rozdělíme trades pro obchodní metriky
     if trades_all is not None and not trades_all.empty:
         trades_dev = trades_all[trades_all['exit_date'] <= train_end]
         trades_test = trades_all[trades_all['entry_date'] >= test_start]
