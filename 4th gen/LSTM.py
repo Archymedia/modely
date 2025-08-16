@@ -941,8 +941,10 @@ def plot_dashboard(strat_cum, bench_cum, test_start_date, strat_cum_test, bench_
     # vertical line at test start with annotation
     ts = pd.to_datetime(test_start_date)
     ax1.axvline(ts, linestyle='--')
-    # Shade the background to the right of the test start line (test period)
-    ax1.axvspan(ts, ax1.get_xlim()[1], facecolor='yellow', alpha=0.1)
+    # Restrict x-axis from 2005 onwards
+    ax1.set_xlim(pd.to_datetime("2005-01-01"), strat_cum.index.max())
+    # Shade the development period (left of test start)
+    ax1.axvspan(ax1.get_xlim()[0], ts, facecolor='yellow', alpha=0.1)
     # popisek vertikální čáry posunutý dolů (na spodek grafu) a formátovaný jako 1.1.2021
     ylim = ax1.get_ylim()
     ax1.annotate(ts.strftime("%d.%m.%Y"), xy=(ts, ylim[0]), xytext=(5, 10),
@@ -1190,6 +1192,28 @@ def main():
     log(f"  pt_hit_pct       {tm_tr['pt_hit_pct']:.4f} | {tm_te['pt_hit_pct']:.4f}")
     log(f"  sl_hit_pct       {tm_tr['sl_hit_pct']:.4f} | {tm_te['sl_hit_pct']:.4f}")
     log(f"  (test_out_of_sample)     win_rate {tm_te_fresh['win_rate']:.4f}, profit_factor {tm_te_fresh['profit_factor']:.4f}, avg_holding_days {tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct {tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct {tm_te_fresh['sl_hit_pct']:.4f}")
+
+    # === POUZE OUT-OF-SAMPLE TEST PERIOD (fresh portfolio od 2021-01-01) ===
+    log("=== POUZE OUT-OF-SAMPLE TEST PERIOD ===")
+    log("(fresh portfolio; bez navazování na DEV, viz test-only běh)")
+
+    # Predikční přesnost (sekvenční regresní metriky na test subsekvencích)
+    log(f"MSE = {mse_te:.6f} | RMSE = {rmse_te:.6f} | R2 = {r2_te:.6f}")
+
+    # Výnos a riziko portfolia (z test-only M2M běhu)
+    log(f"Kumulativní výnos = {cum_te_fresh:.4f} | Annualizovaný výnos = {ann_te_fresh:.4f}")
+    log(f"Riziko: Sharpe_pd = {sr_pd_test_fresh:.4f} | Sharpe_pa = {sr_pa_test_fresh:.4f} | Volatilita_ann = {vola_te_fresh:.4f} | MaxDD = {mdd_te_fresh:.4f}")
+
+    # Realizovaná alfa (OLS na test-only sérii)
+    alpha_annual_fresh = alpha * 252.0
+    log("Realizovaná alfa (OLS):")
+    log(f"  alpha_daily = {alpha:.8f} | alpha_annual = {alpha_annual_fresh:.4f} | t = {alpha_t:.2f} | p = {alpha_p:.4f}")
+    log(f"  beta = {beta:.4f} | t = {beta_t:.2f} | p = {beta_p:.4f} | R2 = {r2_reg:.4f}")
+    log(f"  Hedged Sharpe (strategy - beta*benchmark): pd = {sr_pd_hedged:.4f} | pa = {sr_pa_hedged:.4f}")
+
+    # Obchodní metriky (test-only)
+    log("Obchodní metriky (test-only):")
+    log(f"  win_rate = {tm_te_fresh['win_rate']:.4f} | profit_factor = {tm_te_fresh['profit_factor']:.4f} | avg_holding_days = {tm_te_fresh['avg_holding_days']:.2f} | TP% = {tm_te_fresh['pt_hit_pct']:.4f} | SL% = {tm_te_fresh['sl_hit_pct']:.4f}")
 
     # 11) Realizovaná alfa (na test sample) – jen výpis, výpočet proběhl výše
     log("Realizovaná alfa/beta (Test)")
