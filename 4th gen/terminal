@@ -1,151 +1,563 @@
-[2025-08-16 11:37:04] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 32, 'l2': 0.001}
-Epoch 1/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 50s 7ms/step - loss: 0.0026 - val_loss: 5.2611e-04
-Epoch 2/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 2.8821e-04 - val_loss: 5.2611e-04
-Epoch 3/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 2.8821e-04 - val_loss: 5.2611e-04
-Epoch 4/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 2.8821e-04 - val_loss: 5.2611e-04
-Epoch 5/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 2.8821e-04 - val_loss: 5.2611e-04
-Epoch 6/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 2.8821e-04 - val_loss: 5.2611e-04
-[2025-08-16 11:41:56]   Fold 1/2: best val_loss=0.000526
-Epoch 1/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 50s 7ms/step - loss: 0.0031 - val_loss: 2.8797e-04
-Epoch 2/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-Epoch 3/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-Epoch 4/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 49s 8ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-Epoch 5/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-Epoch 6/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-Epoch 7/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 48s 7ms/step - loss: 5.2708e-04 - val_loss: 2.8797e-04
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8813e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 4/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8813e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 4/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 5/10
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8813e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-[2025-08-16 11:47:38]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-[2025-08-16 11:47:38] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0017 - val_loss: 5.2745e-04
-Epoch 2/10
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8813e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 4/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 5/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 6/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 7/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 8/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-[2025-08-16 11:51:08]   Fold 1/2: best val_loss=0.000525
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 0.0020 - val_loss: 2.9128e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2702e-04 - val_loss: 2.8778e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 4/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 5/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 6/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 7/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-[2025-08-16 11:54:00]   Fold 2/2: best val_loss=0.000288
-[2025-08-16 11:54:00] => mean best val_loss across folds: 0.000407
-[2025-08-16 11:54:00] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.001}
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 7ms/step - loss: 0.0054 - val_loss: 5.2522e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 2.8783e-04 - val_loss: 5.2523e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 2.8788e-04 - val_loss: 5.2523e-04
-Epoch 4/10
+Microsoft Windows [Version 10.0.26120.4733]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\david\Desktop\4th generation>"c:/Users/david/Desktop/4th generation/venv/Scripts/activate.bat"
+
+(venv) C:\Users\david\Desktop\4th generation>"c:/Users/david/Desktop/4th generation/venv/Scripts/python.exe" "c:/Users/david/Desktop/4th generation/LSTM.py"
+2025-08-16 19:20:37.620068: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-08-16 19:20:38.486694: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+[2025-08-16 19:20:40] Startuji LSTM SP100 pipeline...
+[2025-08-16 19:20:40] Načítám SP100 data: C:\Users\david\Desktop\SP100\9DATA_FINAL.csv
+c:\Users\david\Desktop\4th generation\LSTM.py:138: DtypeWarning: Columns (0) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(data_path)
+[2025-08-16 19:20:40] Načítám VIX data: C:\Users\david\Desktop\SP100\VIX_2005_2023.csv
+[2025-08-16 19:20:41] Vypočítávám IDContIndex (kontinuální periody členství v indexu)...
+[2025-08-16 19:20:41] Počítám TA indikátory (RSI, CCI, Stochastic %K) per IDContIndex...
+[2025-08-16 19:20:42] Tvořím subsekvence (okno h=15) pro všechny kontinuální periody...
+[2025-08-16 19:22:25] Počet subsekvencí (vzorků): 496,064
+[2025-08-16 19:22:51] Split dev/test: dev=417,380 vzorků (<= 2020-12-31), test=78,684 vzorků (>= 2021-01-01)
+[2025-08-16 19:22:52] Shapes: X_dev=(417380, 15, 10), X_test=(78684, 15, 10) ; počet kanálů=10 ; feat_names=['RET', 'CLOSE_N', 'HIGH_REL', 'LOW_REL', 'OPEN_RATIO', 'VOL_N', 'RSI', 'CCI', 'STOCH', 'VIX_CHG']
+[2025-08-16 19:22:52] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0}
+2025-08-16 19:22:54.008593: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 20s 6ms/step - loss: 3.6825e-04 - val_loss: 5.3023e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.7456e-04 - val_loss: 5.5289e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.6807e-04 - val_loss: 5.4224e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.6012e-04 - val_loss: 5.4962e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 20s 6ms/step - loss: 2.5445e-04 - val_loss: 5.3868e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.5169e-04 - val_loss: 5.4882e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 9ms/step - loss: 2.4810e-04 - val_loss: 5.3872e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 27s 8ms/step - loss: 2.4419e-04 - val_loss: 5.4773e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 27s 8ms/step - loss: 2.4362e-04 - val_loss: 5.3865e-04
+[2025-08-16 19:26:16]   Fold 1/2: best val_loss=0.000530
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 8ms/step - loss: 7.0801e-04 - val_loss: 2.9372e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 26s 8ms/step - loss: 5.2244e-04 - val_loss: 2.9525e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 27s 8ms/step - loss: 5.2145e-04 - val_loss: 2.8780e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 9ms/step - loss: 5.1928e-04 - val_loss: 2.8950e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 28s 9ms/step - loss: 5.1488e-04 - val_loss: 2.8651e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.1027e-04 - val_loss: 2.8642e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.0231e-04 - val_loss: 2.8895e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.8681e-04 - val_loss: 2.9263e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.7829e-04 - val_loss: 2.9406e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.7139e-04 - val_loss: 2.9037e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.6177e-04 - val_loss: 2.9574e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.5718e-04 - val_loss: 2.9821e-04
+Epoch 13/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.4879e-04 - val_loss: 2.9162e-04
+Epoch 14/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.3631e-04 - val_loss: 3.0403e-04
+[2025-08-16 19:32:03]   Fold 2/2: best val_loss=0.000286
+[2025-08-16 19:32:03] => mean best val_loss across folds: 0.000408
+[2025-08-16 19:32:04] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 0.0017 - val_loss: 5.2742e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8810e-04 - val_loss: 5.2523e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+[2025-08-16 19:36:43]   Fold 1/2: best val_loss=0.000525
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 0.0024 - val_loss: 3.0138e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2868e-04 - val_loss: 2.8778e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+[2025-08-16 19:39:59]   Fold 2/2: best val_loss=0.000288
+[2025-08-16 19:39:59] => mean best val_loss across folds: 0.000407
+[2025-08-16 19:39:59] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 128, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 21s 6ms/step - loss: 4.0282e-04 - val_loss: 5.3169e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.7486e-04 - val_loss: 5.4638e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.7204e-04 - val_loss: 5.3366e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 19s 6ms/step - loss: 2.6233e-04 - val_loss: 5.6352e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 27s 8ms/step - loss: 2.5775e-04 - val_loss: 5.5352e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 29s 9ms/step - loss: 2.5450e-04 - val_loss: 5.4379e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 8ms/step - loss: 2.5232e-04 - val_loss: 5.4691e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.4757e-04 - val_loss: 5.5707e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.4526e-04 - val_loss: 5.4635e-04
+[2025-08-16 19:43:27]   Fold 1/2: best val_loss=0.000532
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 7ms/step - loss: 6.2280e-04 - val_loss: 2.8993e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2184e-04 - val_loss: 2.9941e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2076e-04 - val_loss: 2.8431e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.1446e-04 - val_loss: 2.8413e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.0148e-04 - val_loss: 2.8369e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.8951e-04 - val_loss: 2.8907e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.8017e-04 - val_loss: 2.9518e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.6938e-04 - val_loss: 2.9546e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.6468e-04 - val_loss: 2.8578e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.5534e-04 - val_loss: 2.8932e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.4095e-04 - val_loss: 2.9547e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.3642e-04 - val_loss: 2.9770e-04
+Epoch 13/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 4.2943e-04 - val_loss: 2.9815e-04
+[2025-08-16 19:48:33]   Fold 2/2: best val_loss=0.000284
+[2025-08-16 19:48:33] => mean best val_loss across folds: 0.000408
+[2025-08-16 19:48:33] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 128, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 7ms/step - loss: 0.0018 - val_loss: 5.2729e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8814e-04 - val_loss: 5.2523e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 11/15
 3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 5/10
+Epoch 12/15
 3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-Epoch 6/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 8ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
-[2025-08-16 11:56:29]   Fold 1/2: best val_loss=0.000525
-Epoch 1/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 27s 8ms/step - loss: 0.0053 - val_loss: 2.8740e-04
-Epoch 2/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 8ms/step - loss: 5.2649e-04 - val_loss: 2.8777e-04
-Epoch 3/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 8ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 4/10
+[2025-08-16 19:53:17]   Fold 1/2: best val_loss=0.000525
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 25s 7ms/step - loss: 0.0023 - val_loss: 2.9279e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2725e-04 - val_loss: 2.8777e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 10/15
 3261/3261 ━━━━━━━━━━━━━━━━━━━━ 24s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 5/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-Epoch 6/10
-3261/3261 ━━━━━━━━━━━━━━━━━━━━ 23s 7ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
-[2025-08-16 11:58:57]   Fold 2/2: best val_loss=0.000287
-[2025-08-16 11:58:57] => mean best val_loss across folds: 0.000406
-[2025-08-16 11:58:57] CV 2-fold pro hp={'lstm_units': 64, 'dense_units': 128, 'learning_rate': 0.001, 'batch_size': 32, 'l2': 0.0001}
-Epoch 1/10
-6522/6522 ━━━━━━━━━━━━━━━━━━━━ 45s 7ms/step - loss: 0.0013 - val_loss: 5.2610e-04
-Epoch 2/10
-2282/6522 ━━━━━━━━━━━━━━━━━━━━ 22s 5ms/step - loss: 2.8448e-04  
+[2025-08-16 19:57:14]   Fold 2/2: best val_loss=0.000288
+[2025-08-16 19:57:14] => mean best val_loss across folds: 0.000407
+[2025-08-16 19:57:14] CV 2-fold pro hp={'lstm_units': 128, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 3.7679e-04 - val_loss: 5.2327e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 42s 13ms/step - loss: 2.8379e-04 - val_loss: 5.2877e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.7912e-04 - val_loss: 5.3170e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.6731e-04 - val_loss: 5.3390e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.6092e-04 - val_loss: 5.5712e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.5626e-04 - val_loss: 5.3636e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.5137e-04 - val_loss: 5.5442e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.4817e-04 - val_loss: 5.4571e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.4512e-04 - val_loss: 5.5618e-04
+[2025-08-16 20:03:41]   Fold 1/2: best val_loss=0.000523
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 6.1806e-04 - val_loss: 2.8958e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2690e-04 - val_loss: 2.8791e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2482e-04 - val_loss: 2.8780e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 7.0125e-04 - val_loss: 2.8650e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2462e-04 - val_loss: 2.8918e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2649e-04 - val_loss: 2.8781e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2718e-04 - val_loss: 2.8791e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2497e-04 - val_loss: 2.8796e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2361e-04 - val_loss: 2.8799e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 5.2739e-04 - val_loss: 2.8779e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 5.2256e-04 - val_loss: 2.8779e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2642e-04 - val_loss: 2.8779e-04
+[2025-08-16 20:12:29]   Fold 2/2: best val_loss=0.000287
+[2025-08-16 20:12:29] => mean best val_loss across folds: 0.000405
+[2025-08-16 20:12:29] CV 2-fold pro hp={'lstm_units': 128, 'dense_units': 64, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 13ms/step - loss: 0.0021 - val_loss: 5.3176e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8888e-04 - val_loss: 5.2523e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 41s 12ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 37s 11ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 37s 11ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 37s 11ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 37s 11ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 37s 11ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+[2025-08-16 20:20:36]   Fold 1/2: best val_loss=0.000525
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 39s 12ms/step - loss: 0.0026 - val_loss: 2.9275e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2720e-04 - val_loss: 2.8777e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+[2025-08-16 20:27:42]   Fold 2/2: best val_loss=0.000288
+[2025-08-16 20:27:42] => mean best val_loss across folds: 0.000407
+[2025-08-16 20:27:42] CV 2-fold pro hp={'lstm_units': 128, 'dense_units': 128, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 13ms/step - loss: 3.6864e-04 - val_loss: 5.2514e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8634e-04 - val_loss: 5.2573e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.7688e-04 - val_loss: 5.4448e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.7862e-04 - val_loss: 5.4313e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.5797e-04 - val_loss: 5.4277e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.5303e-04 - val_loss: 5.5399e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 14ms/step - loss: 2.5019e-04 - val_loss: 5.5546e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 14ms/step - loss: 2.4485e-04 - val_loss: 5.5035e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.4186e-04 - val_loss: 5.4542e-04
+[2025-08-16 20:34:15]   Fold 1/2: best val_loss=0.000525
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 47s 14ms/step - loss: 6.7107e-04 - val_loss: 2.8841e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 5.2586e-04 - val_loss: 2.8780e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 46s 14ms/step - loss: 5.2703e-04 - val_loss: 2.8779e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 5.2856e-04 - val_loss: 3.9185e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 14ms/step - loss: 5.2904e-04 - val_loss: 2.8850e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2556e-04 - val_loss: 2.8786e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2600e-04 - val_loss: 2.8782e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2654e-04 - val_loss: 2.8779e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2470e-04 - val_loss: 2.8780e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 6.2673e-04 - val_loss: 2.8800e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 46s 14ms/step - loss: 5.2394e-04 - val_loss: 2.8780e-04
+[2025-08-16 20:42:26]   Fold 2/2: best val_loss=0.000288
+[2025-08-16 20:42:26] => mean best val_loss across folds: 0.000406
+[2025-08-16 20:42:26] CV 2-fold pro hp={'lstm_units': 128, 'dense_units': 128, 'learning_rate': 0.001, 'batch_size': 64, 'l2': 0.0001}
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 45s 13ms/step - loss: 0.0021 - val_loss: 5.2724e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8815e-04 - val_loss: 5.2523e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 11/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+Epoch 12/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 2.8789e-04 - val_loss: 5.2523e-04
+[2025-08-16 20:51:09]   Fold 1/2: best val_loss=0.000525
+Epoch 1/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 47s 14ms/step - loss: 0.0023 - val_loss: 2.8958e-04
+Epoch 2/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 46s 14ms/step - loss: 5.2676e-04 - val_loss: 2.8778e-04
+Epoch 3/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 46s 14ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 4/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 5/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 6/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 46s 14ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 7/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 43s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 8/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 44s 13ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 9/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 49s 15ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+Epoch 10/15
+3261/3261 ━━━━━━━━━━━━━━━━━━━━ 56s 17ms/step - loss: 5.2652e-04 - val_loss: 2.8779e-04
+[2025-08-16 20:58:54]   Fold 2/2: best val_loss=0.000288
+[2025-08-16 20:58:54] => mean best val_loss across folds: 0.000407
+[2025-08-16 20:58:54] === GRID SEARCH RESULTS (ascending by mean val_loss) ===
+[2025-08-16 20:58:54]   LSTM=128.0, Dense=64.0, lr=0.001, bs=64, l2=0.0  | mean_val_loss = 0.000405
+[2025-08-16 20:58:54]   LSTM=128.0, Dense=128.0, lr=0.001, bs=64, l2=0.0 | mean_val_loss = 0.000406
+[2025-08-16 20:58:54]   LSTM=64.0, Dense=128.0, lr=0.001, bs=64, l2=0.0001 | mean_val_loss = 0.000407
+[2025-08-16 20:58:54]   LSTM=128.0, Dense=64.0, lr=0.001, bs=64, l2=0.0001 | mean_val_loss = 0.000407
+[2025-08-16 20:58:54]   LSTM=64.0, Dense=64.0, lr=0.001, bs=64, l2=0.0001 | mean_val_loss = 0.000407
+[2025-08-16 20:58:54]   LSTM=128.0, Dense=128.0, lr=0.001, bs=64, l2=0.0001 | mean_val_loss = 0.000407
+[2025-08-16 20:58:54]   LSTM=64.0, Dense=128.0, lr=0.001, bs=64, l2=0.0  | mean_val_loss = 0.000408
+[2025-08-16 20:58:54]   LSTM=64.0, Dense=64.0, lr=0.001, bs=64, l2=0.0   | mean_val_loss = 0.000408
+[2025-08-16 20:58:54] => BEST: LSTM=128, Dense=64, lr=0.001, bs=64, l2=0        | mean_val_loss = 0.000405
+[2025-08-16 20:58:54] Finální trénink LSTM na celém developmentu s vybranými hyperparametry...
+Epoch 1/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 11ms/step - loss: 4.4012e-04 - val_loss: 4.8721e-04
+Epoch 2/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 67s 11ms/step - loss: 4.2609e-04 - val_loss: 5.7604e-04
+Epoch 3/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 60s 10ms/step - loss: 4.0209e-04 - val_loss: 4.8890e-04
+Epoch 4/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 60s 10ms/step - loss: 4.1488e-04 - val_loss: 4.9172e-04
+Epoch 5/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 59s 10ms/step - loss: 3.9941e-04 - val_loss: 4.8594e-04
+Epoch 6/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 59s 10ms/step - loss: 4.0570e-04 - val_loss: 4.8640e-04
+Epoch 7/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 65s 11ms/step - loss: 4.0136e-04 - val_loss: 4.8699e-04
+Epoch 8/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 4.0003e-04 - val_loss: 5.0108e-04
+Epoch 9/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 3.9783e-04 - val_loss: 4.8587e-04
+Epoch 10/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 3.9849e-04 - val_loss: 4.8585e-04
+Epoch 11/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 3.9833e-04 - val_loss: 4.8585e-04
+Epoch 12/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 4.0182e-04 - val_loss: 4.8586e-04
+Epoch 13/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 69s 12ms/step - loss: 3.9833e-04 - val_loss: 4.8588e-04
+Epoch 14/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 3.9839e-04 - val_loss: 4.8588e-04
+Epoch 15/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 68s 12ms/step - loss: 4.0049e-04 - val_loss: 4.8586e-04
+Epoch 16/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 66s 11ms/step - loss: 3.9846e-04 - val_loss: 4.8588e-04
+Epoch 17/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 60s 10ms/step - loss: 4.0254e-04 - val_loss: 4.8586e-04
+Epoch 18/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 60s 10ms/step - loss: 3.9838e-04 - val_loss: 4.8588e-04
+Epoch 19/50
+5870/5870 ━━━━━━━━━━━━━━━━━━━━ 60s 10ms/step - loss: 4.0035e-04 - val_loss: 4.8587e-04
+[2025-08-16 21:19:23] Finální trénink hotov. Nejlepší val_loss=0.000486
+[2025-08-16 21:19:24] Predikuji na development a test setu...
+13044/13044 ━━━━━━━━━━━━━━━━━━━━ 47s 4ms/step    
+2459/2459 ━━━━━━━━━━━━━━━━━━━━ 9s 4ms/step  
+[2025-08-16 21:20:27] Počítám benchmark (equal-weighted průměr SimpleReturn napříč tickery)...
+[2025-08-16 21:20:27] Simuluji obchodní strategii (full) s M2M přeceňováním a bariérami ±2 %...
+[2025-08-16 21:20:39]   ...simulace full: zpracováno 250 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 500 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 750 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 1000 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 1250 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 1500 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 1750 dní
+[2025-08-16 21:20:40]   ...simulace full: zpracováno 2000 dní
+[2025-08-16 21:20:41]   ...simulace full: zpracováno 2250 dní
+[2025-08-16 21:20:41]   ...simulace full: zpracováno 2500 dní
+[2025-08-16 21:20:41]   ...simulace full: zpracováno 2750 dní
+[2025-08-16 21:20:41]   ...simulace full: zpracováno 3000 dní
+[2025-08-16 21:20:41]   ...simulace full: zpracováno 3250 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 3500 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 3750 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 4000 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 4250 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 4500 dní
+[2025-08-16 21:20:42]   ...simulace full: zpracováno 4750 dní
+[2025-08-16 21:20:43] Simuluji obchodní strategii (test_rebased) s M2M přeceňováním a bariérami ±2 %...
+[2025-08-16 21:20:45]   ...simulace test_rebased: zpracováno 250 dní
+[2025-08-16 21:20:45]   ...simulace test_rebased: zpracováno 500 dní
+[2025-08-16 21:20:45]   ...simulace test_rebased: zpracováno 750 dní
+[2025-08-16 21:20:45] Sharpe_pd (dev) = -0.0606, Sharpe_pa (dev) = -0.9626
+[2025-08-16 21:20:45] Sharpe_pd (test) = -0.0583, Sharpe_pa (test) = -0.9249
+[2025-08-16 21:20:45] +-------------------------------+
+[2025-08-16 21:20:45] | TEST OOS (rebased from 2021-01-01) |
+[2025-08-16 21:20:45] +-------------------------------+
+[2025-08-16 21:20:45] | MSE                  0.000326 |
+[2025-08-16 21:20:45] | RMSE                 0.018051 |
+[2025-08-16 21:20:45] | MAE                  0.012390 |
+[2025-08-16 21:20:45] | R²                  -0.000341 |
+[2025-08-16 21:20:45] | Cum. Return           -14.08% |
+[2025-08-16 21:20:45] | Annual Return          -4.77% |
+[2025-08-16 21:20:45] | Sharpe (pd)         -0.057564 |
+[2025-08-16 21:20:45] | Sharpe (pa)         -0.913804 |
+[2025-08-16 21:20:45] | Ann. Volatility         5.22% |
+[2025-08-16 21:20:45] | Max Drawdown          -18.80% |
+[2025-08-16 21:20:45] | Alpha (daily)       -0.000210 |
+[2025-08-16 21:20:45] | Alpha (annual)      -0.052920 |
+[2025-08-16 21:20:45] | Alpha t-stat        -1.798401 |
+[2025-08-16 21:20:45] | Alpha p-value        0.072501 |
+[2025-08-16 21:20:45] | Beta                 0.044605 |
+[2025-08-16 21:20:45] | Beta t-stat          3.843599 |
+[2025-08-16 21:20:45] | Beta p-value         0.000131 |
+[2025-08-16 21:20:45] | Regress R²           0.018635 |
+[2025-08-16 21:20:45] | Hedged Sharpe (pd)  -0.064504 |
+[2025-08-16 21:20:45] | Hedged Sharpe (pa)  -1.023968 |
+[2025-08-16 21:20:45] | Win rate               48.32% |
+[2025-08-16 21:20:45] | Profit factor        0.953915 |
+[2025-08-16 21:20:45] | Avg holding days     2.731264 |
+[2025-08-16 21:20:45] | TP hit %               48.32% |
+[2025-08-16 21:20:45] | SL hit %               51.68% |
+[2025-08-16 21:20:45] +-------------------------------+
+[2025-08-16 21:20:46] Uloženo PNG: C:\Users\david\Desktop\4th generation\LSTM_dashboard.png
+[2025-08-16 21:20:47] Uloženo PNG (loss): C:\Users\david\Desktop\4th generation\LSTM_loss_curve.png
+[2025-08-16 21:20:47] Uloženo PNG (test panel): C:\Users\david\Desktop\4th generation\LSTM_test_panel.png
+[2025-08-16 21:20:47] Uloženo TEST OOS cumulative (Excel/CSV): C:\Users\david\Desktop\4th generation\LSTM_test_oos_cum.csv
+[2025-08-16 21:20:47] ====== SUMMARY ======
+[2025-08-16 21:20:47] --- CONFIG ---
+[2025-08-16 21:20:47] Selected (tuned): LSTM=128, Dense=64, lr=0.001, bs=64, l2=0
+[2025-08-16 21:20:47] Training controls: k_folds=2, CV_epochs=15, final_epochs=50, ES_patience=8, keras_verbose=1     
+[2025-08-16 21:20:47] Features: window(h)=15, RSI=True(p=14), CCI=True(p=20), STOCH=True(p=14)
+[2025-08-16 21:20:47] Vzorky: dev=417,380, test=78,684, okno h=15, kanály=10
+[2025-08-16 21:20:47] +-------------------------------+
+[2025-08-16 21:20:47] | TEST OOS (rebased from 2021-01-01) |
+[2025-08-16 21:20:47] +-------------------------------+
+[2025-08-16 21:20:47] | MSE                  0.000326 |
+[2025-08-16 21:20:47] | RMSE                 0.018051 |
+[2025-08-16 21:20:47] | MAE                  0.012390 |
+[2025-08-16 21:20:47] | R²                  -0.000341 |
+[2025-08-16 21:20:47] | Cum. Return           -14.08% |
+[2025-08-16 21:20:47] | Annual Return          -4.77% |
+[2025-08-16 21:20:47] | Sharpe (pd)         -0.057564 |
+[2025-08-16 21:20:47] | Sharpe (pa)         -0.913804 |
+[2025-08-16 21:20:47] | Ann. Volatility         5.22% |
+[2025-08-16 21:20:47] | Max Drawdown          -18.80% |
+[2025-08-16 21:20:47] | Alpha (daily)       -0.000210 |
+[2025-08-16 21:20:47] | Alpha (annual)      -0.052920 |
+[2025-08-16 21:20:47] | Alpha t-stat        -1.798401 |
+[2025-08-16 21:20:47] | Alpha p-value        0.072501 |
+[2025-08-16 21:20:47] | Beta                 0.044605 |
+[2025-08-16 21:20:47] | Beta t-stat          3.843599 |
+[2025-08-16 21:20:47] | Beta p-value         0.000131 |
+[2025-08-16 21:20:47] | Regress R²           0.018635 |
+[2025-08-16 21:20:47] | Hedged Sharpe (pd)  -0.064504 |
+[2025-08-16 21:20:47] | Hedged Sharpe (pa)  -1.023968 |
+[2025-08-16 21:20:47] | Win rate               48.32% |
+[2025-08-16 21:20:47] | Profit factor        0.953915 |
+[2025-08-16 21:20:47] | Avg holding days     2.731264 |
+[2025-08-16 21:20:47] | TP hit %               48.32% |
+[2025-08-16 21:20:47] | SL hit %               51.68% |
+[2025-08-16 21:20:47] +-------------------------------+
+[2025-08-16 21:20:47] +----------------------------+
+[2025-08-16 21:20:47] | DEVELOPMENT (2005 - 2020)  |
+[2025-08-16 21:20:47] +----------------------------+
+[2025-08-16 21:20:47] | MSE               0.000409 |
+[2025-08-16 21:20:47] | RMSE              0.020225 |
+[2025-08-16 21:20:47] | MAE               0.012132 |
+[2025-08-16 21:20:47] | R²               -0.007448 |
+[2025-08-16 21:20:47] | Cum. Return        -54.55% |
+[2025-08-16 21:20:47] | Annual Return       -4.66% |
+[2025-08-16 21:20:47] | Sharpe (pd)      -0.060641 |
+[2025-08-16 21:20:47] | Sharpe (pa)      -0.962646 |
+[2025-08-16 21:20:47] | Ann. Volatility      4.84% |
+[2025-08-16 21:20:47] | Max Drawdown       -56.85% |
+[2025-08-16 21:20:47] +----------------------------+
