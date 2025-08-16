@@ -488,6 +488,7 @@ def compute_benchmark(df):
     return bench
 
 class Position:
+    __slots__ = ("ric","direction","entry_date","entry_price","tp","sl","is_open","last_price","exit_date","exit_price","exit_reason","idx")
     def __init__(self, ric, direction, entry_date, entry_price, tp, sl):
         self.ric = ric
         self.direction = direction  # +1 long, -1 short
@@ -500,12 +501,11 @@ class Position:
         self.exit_date = None
         self.exit_price = None
         self.exit_reason = None  # 'TP' or 'SL'
+        self.idx = None  # ukazatel na aktuální index v OHLC poli daného instrumentu
 
     def check_barriers(self, date, high, low, close, priority='SL_first'):
-        """ Kontrola zásahu bariér v 'date'.
-            Pokud zasáhne, nastaví exit a uzavře pozici s realizovaným výnosem od entry.
-            Vrať tuple (closed_today: bool, realized_pnl: float or 0 for today portion).
-        """
+        """ Kontrola zásahu bariér v 'date'. Pokud zasáhne, nastaví exit a uzavře pozici.
+            Vrať tuple (closed_today: bool, realized_pnl: float pro dnešek). """
         if not self.is_open:
             return False, 0.0
 
@@ -516,66 +516,30 @@ class Position:
             hit_tp = high >= tp_price
             hit_sl = low <= sl_price
         else:  # short
-            tp_price = self.entry_price * (1 + self.sl)  # pro short je TP při poklesu o 2 % (zrcadlově)
-            sl_price = self.entry_price * (1 + self.tp)  # SL při růstu o 2 %
+            tp_price = self.entry_price * (1 + self.sl)  # TP při poklesu
+            sl_price = self.entry_price * (1 + self.tp)  # SL při růstu
             hit_tp = low <= tp_price
             hit_sl = high >= sl_price
 
-        # Pokud zasáhne obě: použij prioritu
         hit_today = False
         realized = 0.0
         if hit_sl and hit_tp:
             if priority == 'SL_first':
-                # konzervativně nejdřív SL
-                exit_price = sl_price
-                self.exit_reason = 'SL'
+                exit_price = sl_price; self.exit_reason = 'SL'
             else:
-                exit_price = tp_price
-                self.exit_reason = 'TP'
-            self.exit_date = date
-            self.exit_price = exit_price
-            self.is_open = False
-            hit_today = True
-            # Realizovaný celkový výnos od entry do exit:
-            # pro long: (exit/entry - 1), pro short: (entry/exit - 1)
-            if self.direction == +1:
-                realized = (self.exit_price / self.entry_price) - 1.0
-            else:
-                realized = (self.entry_price / self.exit_price) - 1.0
-
+                exit_price = tp_price; self.exit_reason = 'TP'
+            self.exit_date = date; self.exit_price = exit_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
         elif hit_sl:
-            exit_price = sl_price
-            self.exit_reason = 'SL'
-            self.exit_date = date
-            self.exit_price = exit_price
-            self.is_open = False
-            hit_today = True
-            if self.direction == +1:
-                realized = (self.exit_price / self.entry_price) - 1.0
-            else:
-                realized = (self.entry_price / self.exit_price) - 1.0
-
+            self.exit_reason = 'SL'; self.exit_date = date; self.exit_price = sl_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
         elif hit_tp:
-            exit_price = tp_price
-            self.exit_reason = 'TP'
-            self.exit_date = date
-            self.exit_price = exit_price
-            self.is_open = False
-            hit_today = True
-            if self.direction == +1:
-                realized = (self.exit_price / self.entry_price) - 1.0
-            else:
-                realized = (self.entry_price / self.exit_price) - 1.0
+            self.exit_reason = 'TP'; self.exit_date = date; self.exit_price = tp_price; self.is_open = False; hit_today = True
+            realized = (self.exit_price / self.entry_price - 1.0) if self.direction == +1 else (self.entry_price / self.exit_price - 1.0)
         else:
-            # Bez zásahu: pro M2M denní zisk použijeme Close dne t vůči včerejší referenci:
-            # pro long: (Close/last - 1), pro short: (last/Close - 1)
-            if self.direction == +1:
-                realized = (close / self.last_price) - 1.0
-            else:
-                realized = (self.last_price / close) - 1.0
-            # Posuň referenci pro další den
+            # M2M: bez zásahu
+            realized = (close / self.last_price - 1.0) if self.direction == +1 else (self.last_price / close - 1.0)
             self.last_price = close
-
         return hit_today, realized
 
 def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.02, sl=-0.02, priority='SL_first', phase=None):
@@ -630,7 +594,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
         else:
             lst.append(pos_index)
 
-    # Předvýběr plánovaných otevření (pro optimalizaci)
+    # Předvýběr plánovaných otevření (pro optimalizaci) – deduplikace (long má přednost)
     planned_openings = {}
     for sig_day in signal_dates:
         day_preds = pred_by_signal.get_group(sig_day).sort_values('pred', ascending=False)
@@ -638,9 +602,12 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
             day_preds.head(top_n).assign(direction=+1),
             day_preds.tail(bottom_n).assign(direction=-1)
         ], axis=0)
+        seen_idc = set()
         for _, row in entries.iterrows():
             idc = row['IDContIndex']
-            key = (sig_day, idc)
+            if idc in seen_idc:
+                continue  # vynech duplikát (např. současně v top i bottom)
+            seen_idc.add(idc)
             if idc not in ric_dates:
                 continue
             dates_arr = ric_dates[idc]
@@ -649,9 +616,7 @@ def run_strategy(pred_df, ohlc_map, dates_ordered, top_n=10, bottom_n=10, tp=0.0
             if ins >= len(dates_arr):
                 continue
             planned_entry_day = dates_arr[ins]
-            if planned_entry_day not in planned_openings:
-                planned_openings[planned_entry_day] = []
-            planned_openings[planned_entry_day].append((idc, int(row['direction']), ins))
+            planned_openings.setdefault(planned_entry_day, []).append((idc, int(row['direction']), ins))
 
     daily_pnl_list = []
     for d in all_dates:
@@ -1028,16 +993,17 @@ def main():
     # 10) Vyhodnocení (Sharpe)
     sr_pd_dev, sr_pa_dev = sharpe_ratio(pnl_dev)
     sr_pd_test, sr_pa_test = sharpe_ratio(pnl_test)
-    # Sharpe pro FRESH test-only běh (vedle full-test perspektivy)
+    # Sharpe pro OUT-OF-SAMPLE test-only běh (vedle full-test perspektivy)
     sr_pd_test_fresh, sr_pa_test_fresh = sharpe_ratio(pnl_test_rebased)
+    log(f"Sharpe_pd (test - out-of-sample only) = {sr_pd_test_fresh:.4f}, Sharpe_pa (test - out-of-sample only) = {sr_pa_test_fresh:.4f}")
 
-    # Další metriky pro FRESH test-only běh
+    # Další metriky pro OUT-OF-SAMPLE test-only běh
     cum_te_fresh = cumulative_return(pnl_test_rebased)
     ann_te_fresh = annualized_return(pnl_test_rebased)
     vola_te_fresh = annual_volatility(pnl_test_rebased)
     mdd_te_fresh = max_drawdown(pnl_test_rebased)
 
-    # Trade metriky i pro fresh test-only běh
+    # Trade metriky i pro out-of-sample test-only běh
     tm_te_fresh = trade_metrics_from_trades(trades_test_rebased)
 
     log(f"Sharpe_pd (dev) = {sr_pd_dev:.4f}, Sharpe_pa (dev) = {sr_pa_dev:.4f}")
@@ -1052,6 +1018,13 @@ def main():
     log(f"  rmse    {rmse_tr:.6f} | {rmse_te:.6f}")
     log(f"  r2      {r2_tr:.6f} | {r2_te:.6f}")
 
+    # (Moved up) Realizovaná alfa na TEST (fresh-only) a hedged metriky, aby byly k dispozici pro výpis níže
+    bench_test = benchmark.reindex(pnl_test_rebased.index).fillna(0.0)
+    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test_rebased, bench_test)
+    hedged_ret_test = pnl_test_rebased - beta * bench_test
+    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret_test)
+    hedged_cum_test = (1.0 + hedged_ret_test).cumprod() - 1.0
+
     # Výnosové metriky (Train/Test)
     cum_tr = cumulative_return(pnl_dev)
     cum_te = cumulative_return(pnl_test)
@@ -1063,39 +1036,34 @@ def main():
     mdd_te = max_drawdown(pnl_test)
 
     log("Výnosové metriky (Train/Test)")
+    log("  Pozn.: TEST (full-run, navazující na DEV, viz 1. graf); TEST_FRESH = nový běh od 2021-01-01 (fresh portfolio)")
     log(f"  cum       {cum_tr:.4f} | {cum_te:.4f}")
     log(f"  ann       {ann_tr:.4f} | {ann_te:.4f}")
     log(f"  sharpe    {sr_pd_dev:.4f} | {sr_pd_test:.4f}")
     log(f"  maxdd     {mdd_tr:.4f} | {mdd_te:.4f}")
     log(f"  vola_ann  {vola_tr:.4f} | {vola_te:.4f}")
+    log(f"  sharpe_test_fresh (unhedged | hedged)  {sr_pd_test_fresh:.4f} | {sr_pd_hedged:.4f}")
 
     # Metriky obchodů (Train/Test)
     tm_tr = trade_metrics_from_trades(trades_dev)
     tm_te = trade_metrics_from_trades(trades_test)
     log("Metriky obchodů (Train/Test)")
+    log("  Pozn.: TEST (full-run, navazující na DEV, viz 1. graf); TEST_FRESH = nový běh od 2021-01-01 (fresh portfolio)")
     log(f"  win_rate         {tm_tr['win_rate']:.4f} | {tm_te['win_rate']:.4f}")
     log(f"  profit_factor    {tm_tr['profit_factor']:.4f} | {tm_te['profit_factor']:.4f}")
     log(f"  avg_holding_days {tm_tr['avg_holding_days']:.2f} | {tm_te['avg_holding_days']:.2f}")
     log(f"  pt_hit_pct       {tm_tr['pt_hit_pct']:.4f} | {tm_te['pt_hit_pct']:.4f}")
     log(f"  sl_hit_pct       {tm_tr['sl_hit_pct']:.4f} | {tm_te['sl_hit_pct']:.4f}")
-    log(f"  (test_fresh)     win_rate {tm_te_fresh['win_rate']:.4f}, profit_factor {tm_te_fresh['profit_factor']:.4f}, avg_holding_days {tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct {tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct {tm_te_fresh['sl_hit_pct']:.4f}")
+    log(f"  (test_out_of_sample)     win_rate {tm_te_fresh['win_rate']:.4f}, profit_factor {tm_te_fresh['profit_factor']:.4f}, avg_holding_days {tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct {tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct {tm_te_fresh['sl_hit_pct']:.4f}")
 
-    # 11) Realizovaná alfa (na test sample)
-    # Sladíme benchmark s horizontem FRESH test-only běhu (pnl_test_rebased)
-    bench_test = benchmark.reindex(pnl_test_rebased.index).fillna(0.0)
-    alpha, beta, alpha_t, alpha_p, beta_t, beta_p, r2_reg = realized_alpha(pnl_test_rebased, bench_test)
+    # 11) Realizovaná alfa (na test sample) – jen výpis, výpočet proběhl výše
     log("Realizovaná alfa/beta (Test)")
     log(f"  alpha_daily {alpha:.8f}")
     log(f"  alpha_t     {alpha_t:.2f}   alpha_p {alpha_p:.4f}")
     log(f"  beta        {beta:.4f}")
     log(f"  beta_t      {beta_t:.2f}   beta_p  {beta_p:.4f}")
     log(f"  r2          {r2_reg:.4f}")
-
-    # Hedged varianta – počítej z rebased test běhu pro panel 2 (panel 1 hedged neukazujeme)
-    hedged_ret_test = pnl_test_rebased - beta * bench_test
-    sr_pd_hedged, sr_pa_hedged = sharpe_ratio(hedged_ret_test)
-    log(f"Hedged Sharpe (test): pd={sr_pd_hedged:.4f}, pa={sr_pa_hedged:.4f}")
-    hedged_cum_test = (1.0 + hedged_ret_test).cumprod() - 1.0
+    log(f"Hedged Sharpe (test - out-of-sample only): pd={sr_pd_hedged:.4f}, pa={sr_pa_hedged:.4f}")
 
     # 12) Kumulativní výnosy a graf
     strat_cum_full = (1 + pnl_all).cumprod() - 1.0   # Panel 1: nepřerušená křivka
@@ -1141,17 +1109,18 @@ def main():
     log("--- PERFORMANCE (DAILY) ---")
     log("DEV (full-run up to 2020-12-31):")
     log(f"  cum={cum_tr:.4f} | ann={ann_tr:.4f} | sharpe_pd={sr_pd_dev:.4f} | sharpe_pa={sr_pa_dev:.4f} | maxdd={mdd_tr:.4f} | vola_ann={vola_tr:.4f}")
-    log("TEST (full-run from 2021-01-01, portfolio continues):")
+    log("TEST (full-run, navazující na DEV, viz 1. graf):")
     log(f"  cum={cum_te:.4f} | ann={ann_te:.4f} | sharpe_pd={sr_pd_test:.4f} | sharpe_pa={sr_pa_test:.4f} | maxdd={mdd_te:.4f} | vola_ann={vola_te:.4f}")
-    log("TEST FRESH-ONLY (portfolio starts at 0 on 2021-01-01):")
+    log("TEST OUT-OF-SAMPLE-ONLY (portfolio starts at 0 on 2021-01-01):")
     log(f"  cum={cum_te_fresh:.4f} | ann={ann_te_fresh:.4f} | sharpe_pd={sr_pd_test_fresh:.4f} | sharpe_pa={sr_pa_test_fresh:.4f} | maxdd={mdd_te_fresh:.4f} | vola_ann={vola_te_fresh:.4f}")
+    log(f"  (hedged) sharpe_pd={sr_pd_hedged:.4f} | sharpe_pa={sr_pa_hedged:.4f}")
 
     log("--- TRADES ---")
     log(f"DEV:   win_rate={tm_tr['win_rate']:.4f}, profit_factor={tm_tr['profit_factor']:.4f}, avg_holding_days={tm_tr['avg_holding_days']:.2f}, pt_hit_pct={tm_tr['pt_hit_pct']:.4f}, sl_hit_pct={tm_tr['sl_hit_pct']:.4f}")
     log(f"TEST:  win_rate={tm_te['win_rate']:.4f}, profit_factor={tm_te['profit_factor']:.4f}, avg_holding_days={tm_te['avg_holding_days']:.2f}, pt_hit_pct={tm_te['pt_hit_pct']:.4f}, sl_hit_pct={tm_te['sl_hit_pct']:.4f}")
-    log(f"TEST_FRESH:  win_rate={tm_te_fresh['win_rate']:.4f}, profit_factor={tm_te_fresh['profit_factor']:.4f}, avg_holding_days={tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct={tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct={tm_te_fresh['sl_hit_pct']:.4f}")
+    log(f"TEST_OUT_OF_SAMPLE:  win_rate={tm_te_fresh['win_rate']:.4f}, profit_factor={tm_te_fresh['profit_factor']:.4f}, avg_holding_days={tm_te_fresh['avg_holding_days']:.2f}, pt_hit_pct={tm_te_fresh['pt_hit_pct']:.4f}, sl_hit_pct={tm_te_fresh['sl_hit_pct']:.4f}")
 
-    log("--- REALIZED ALPHA on TEST (fresh-only) ---")
+    log("--- REALIZED ALPHA on TEST (out-of-sample only) ---")
     alpha_annual = alpha * 252.0
     log(f"alpha_daily={alpha:.8f}, alpha_annual={alpha_annual:.4f}, alpha_t={alpha_t:.2f}, alpha_p={alpha_p:.4f}")
     log(f"beta={beta:.4f}, beta_t={beta_t:.2f}, beta_p={beta_p:.4f}, R2={r2_reg:.4f}")
